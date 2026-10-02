@@ -1,0 +1,6 @@
+{
+  "name": "KlinikFinance - Sistem Keuangan & Rekap SIMRS",
+  "description": "Sistem keuangan dan rekap kasir klinik terintegrasi SIMRS, database otomatis Google Sheets (auto-rollover 9jt sel) dan Google Drive untuk berkas/PDF nota, cetak laporan A4, serta rekonsiliasi kas.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
