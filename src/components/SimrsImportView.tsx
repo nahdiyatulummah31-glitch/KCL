@@ -1210,23 +1210,35 @@ export const SimrsImportView: React.FC<SimrsImportViewProps> = ({
         </div>
 
         <div className="flex items-center gap-2 flex-wrap">
-          {onSyncGoogle && (
+          {googleStatus?.isConnected ? (
             <button
-              onClick={onSyncGoogle}
-              className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold transition-colors shadow-2xs cursor-pointer ${
-                googleStatus?.isConnected
-                  ? 'bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300'
-                  : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200'
-              }`}
-              title={
-                googleStatus?.isConnected
-                  ? 'Kirim dan sinkronkan data transaksi ini ke Google Sheets database klinik'
-                  : 'Hubungkan Akun Google untuk sinkronisasi ke Google Sheets'
-              }
+              onClick={() => {
+                if (googleStatus.spreadsheetUrl) {
+                  window.open(googleStatus.spreadsheetUrl, '_blank');
+                } else if (onSyncGoogle) {
+                  onSyncGoogle();
+                }
+              }}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 transition-colors shadow-2xs cursor-pointer"
+              title="Data transaksi otomatis tersimpan ke Google Sheets secara real-time. Klik untuk melihat spreadsheet."
             >
-              <FileSpreadsheet className={`w-4 h-4 ${googleStatus?.isConnected ? 'text-emerald-600' : 'text-slate-500'}`} />
-              <span>{googleStatus?.isConnected ? 'Kirim ke Sheets' : 'Sinkron Google Sheets'}</span>
+              <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
+              <span className="flex items-center gap-1.5">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 animate-pulse" />
+                <span>Google Sheets (Auto-Sync)</span>
+              </span>
             </button>
+          ) : (
+            onSyncGoogle && (
+              <button
+                onClick={onSyncGoogle}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200 transition-colors shadow-2xs cursor-pointer"
+                title="Hubungkan Akun Google untuk mengaktifkan auto-sync otomatis ke Google Sheets"
+              >
+                <FileSpreadsheet className="w-4 h-4 text-slate-500" />
+                <span>Hubungkan Google Sheets</span>
+              </button>
+            )
           )}
           <button
             onClick={handleDownloadSampleExcel}

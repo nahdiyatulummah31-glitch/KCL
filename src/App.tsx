@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   ClinicProfile,
   UserAccount,
@@ -95,6 +95,82 @@ export default function App() {
   });
   const [isSyncingGoogle, setIsSyncingGoogle] = useState<boolean>(false);
   const [syncProgress, setSyncProgress] = useState<{ message: string; percent: number } | undefined>(undefined);
+  const [autoSyncStatus, setAutoSyncStatus] = useState<'idle' | 'syncing' | 'saved' | 'error'>('idle');
+  const [lastAutoSyncTime, setLastAutoSyncTime] = useState<string | null>(null);
+  const isInitialMount = useRef(true);
+  const autoSyncTimerRef = useRef<any>(null);
+
+  // Background real-time auto-sync logic
+  const performAutoSync = useCallback(async () => {
+    if (!googleStatus.isConnected) return;
+    const token = await getAccessToken();
+    if (!token) return;
+
+    try {
+      setAutoSyncStatus('syncing');
+      const res = await syncAllToGoogleDatabase({
+        transactions: simrsTransactions,
+        expenses,
+        debts,
+        receivables,
+        inventory: assets,
+        cashFlow: cashFlowEntries,
+        currentStatus: googleStatus,
+      });
+      setGoogleStatus(res);
+      setAutoSyncStatus('saved');
+      const nowStr = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
+      setLastAutoSyncTime(nowStr);
+      setTimeout(() => {
+        setAutoSyncStatus('idle');
+      }, 3500);
+    } catch (err: any) {
+      console.warn('Auto-sync background check:', err?.message || err);
+      setAutoSyncStatus('error');
+      setTimeout(() => setAutoSyncStatus('idle'), 4000);
+    }
+  }, [
+    googleStatus,
+    simrsTransactions,
+    expenses,
+    debts,
+    receivables,
+    assets,
+    cashFlowEntries,
+  ]);
+
+  // Trigger auto-sync whenever operational data changes
+  useEffect(() => {
+    if (isInitialMount.current) {
+      isInitialMount.current = false;
+      return;
+    }
+    if (!googleStatus.isConnected) return;
+
+    if (autoSyncTimerRef.current) {
+      clearTimeout(autoSyncTimerRef.current);
+    }
+
+    // Auto-save changes within 1.5 seconds of user input
+    autoSyncTimerRef.current = setTimeout(() => {
+      performAutoSync();
+    }, 1500);
+
+    return () => {
+      if (autoSyncTimerRef.current) {
+        clearTimeout(autoSyncTimerRef.current);
+      }
+    };
+  }, [
+    simrsTransactions,
+    expenses,
+    debts,
+    receivables,
+    assets,
+    cashFlowEntries,
+    googleStatus.isConnected,
+    performAutoSync,
+  ]);
 
   // Active view tab
   const [activeTab, setActiveTab] = useState<string>('dashboard');
@@ -102,7 +178,9 @@ export default function App() {
   const [showResetModal, setShowResetModal] = useState<boolean>(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [highlightItemId, setHighlightItemId] = useState<string | undefined>(undefined);
-  const [showLoginModal, setShowLoginModal] = useState<boolean>(false);
+  const [isLoggedIn, setIsLoggedIn] = useState<boolean>(() => {
+    return getStoredItem<boolean>(STORAGE_KEYS.IS_LOGGED_IN, false);
+  });
   const [printFilter, setPrintFilter] = useState<
     { mode: 'shift' | 'harian' | 'bulanan'; date: string; shift: string; month: string } | undefined
   >(undefined);
@@ -116,6 +194,28 @@ export default function App() {
     lastLogin: 'Hari ini',
     isActive: true,
   };
+
+  const handleLoginSuccess = (user: UserAccount) => {
+    setActiveUserId(user.id);
+    setIsLoggedIn(true);
+    setStoredItem(STORAGE_KEYS.IS_LOGGED_IN, true);
+    setStoredItem(STORAGE_KEYS.ACTIVE_USER_ID, user.id);
+  };
+
+  const handleLogout = () => {
+    setIsLoggedIn(false);
+    setStoredItem(STORAGE_KEYS.IS_LOGGED_IN, false);
+  };
+
+  // Guard restricted tabs for non-manager accounts
+  useEffect(() => {
+    if (
+      !isOwnerOrManager(activeUser) &&
+      (activeTab === 'payroll' || activeTab === 'clinic_settings' || activeTab === 'staff_management')
+    ) {
+      setActiveTab('dashboard');
+    }
+  }, [activeUser, activeTab]);
 
   // Recompute due notifications whenever debts or receivables change
   const notifications: DueNotification[] = calculateDueNotifications(debts, receivables);
@@ -738,6 +838,17 @@ export default function App() {
     setActiveTab('debts_receivables');
   };
 
+  if (!isLoggedIn) {
+    return (
+      <LoginView
+        profile={profile}
+        users={users}
+        activeUser={activeUser}
+        onLoginSuccess={handleLoginSuccess}
+      />
+    );
+  }
+
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col font-sans text-slate-900 selection:bg-teal-100 selection:text-teal-900">
       {/* Top Navbar */}
@@ -747,10 +858,12 @@ export default function App() {
         allUsers={users}
         notifications={notifications}
         googleStatus={googleStatus}
+        autoSyncStatus={autoSyncStatus}
+        lastAutoSyncTime={lastAutoSyncTime}
         onSwitchUser={handleSwitchUser}
         onNavigateTab={handleSelectTab}
         onSelectNotificationItem={handleSelectNotification}
-        onOpenLogin={() => setShowLoginModal(true)}
+        onLogout={handleLogout}
       />
 
       {/* Main App Body */}
@@ -971,8 +1084,8 @@ export default function App() {
               <RestrictedAccessView
                 activeUser={activeUser}
                 featureTitle="Gaji Karyawan & Honor Medis"
-                onGoToAllowed={() => handleSelectTab('cash_flow', 'simrs')}
-                onOpenLogin={() => setShowLoginModal(true)}
+                onGoToAllowed={() => handleSelectTab('dashboard')}
+                onOpenLogin={handleLogout}
               />
             )
           )}
@@ -1012,27 +1125,13 @@ export default function App() {
               <RestrictedAccessView
                 activeUser={activeUser}
                 featureTitle="Pengaturan Klinik & Hak Akses"
-                onGoToAllowed={() => handleSelectTab('cash_flow', 'simrs')}
-                onOpenLogin={() => setShowLoginModal(true)}
+                onGoToAllowed={() => handleSelectTab('dashboard')}
+                onOpenLogin={handleLogout}
               />
             )
           )}
         </main>
       </div>
-
-      {/* Modal / Halaman Login Petugas */}
-      {showLoginModal && (
-        <LoginView
-          profile={profile}
-          users={users}
-          activeUser={activeUser}
-          onLoginSuccess={(user) => {
-            setActiveUserId(user.id);
-            setShowLoginModal(false);
-          }}
-          onClose={() => setShowLoginModal(false)}
-        />
-      )}
 
       {/* Custom In-App Modal for Reset Demo (Bypasses iframe sandbox window.confirm block) */}
       {showResetModal && (

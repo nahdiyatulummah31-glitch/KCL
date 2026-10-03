@@ -247,7 +247,7 @@ export const INITIAL_CLINIC_PROFILE: ClinicProfile = {
 export const INITIAL_USERS: UserAccount[] = [
   {
     id: 'usr-1',
-    name: 'dr. H. Hendra Wijaya, Sp.PK (Owner / Direktur)',
+    name: 'dr. H. Hendra Wijaya, Sp.PK',
     username: 'owner',
     password: 'owner123',
     pin: '123456',
@@ -258,7 +258,7 @@ export const INITIAL_USERS: UserAccount[] = [
   },
   {
     id: 'usr-2',
-    name: 'Nadia, S.E. (Manajer Keuangan)',
+    name: 'Nadia, S.E.',
     username: 'manajer',
     password: 'manajer123',
     pin: '654321',
@@ -269,7 +269,7 @@ export const INITIAL_USERS: UserAccount[] = [
   },
   {
     id: 'usr-3',
-    name: 'Siti Fatimah (Karyawan Biasa / Kasir)',
+    name: 'Siti Fatimah',
     username: 'karyawan',
     password: 'karyawan123',
     pin: '112233',
@@ -280,7 +280,7 @@ export const INITIAL_USERS: UserAccount[] = [
   },
   {
     id: 'usr-4',
-    name: 'Budi Santoso (Karyawan Biasa / Kasir)',
+    name: 'Budi Santoso',
     username: 'budi',
     password: 'budi123',
     pin: '445566',
@@ -291,7 +291,7 @@ export const INITIAL_USERS: UserAccount[] = [
   },
   {
     id: 'usr-5',
-    name: 'Drs. Agus Setyo, Ak., CA (Auditor)',
+    name: 'Drs. Agus Setyo, Ak., CA',
     username: 'auditor',
     password: 'audit123',
     pin: '998877',

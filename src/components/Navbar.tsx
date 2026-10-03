@@ -13,6 +13,8 @@ import {
   LogIn,
   LogOut,
   FileSpreadsheet,
+  RefreshCw,
+  CheckCircle2,
 } from 'lucide-react';
 import { ClinicProfile, UserAccount, DueNotification, UserRole, GoogleDatabaseStatus } from '../types';
 import { formatRupiah } from '../utils/formatters';
@@ -23,10 +25,12 @@ interface NavbarProps {
   allUsers: UserAccount[];
   notifications: DueNotification[];
   googleStatus?: GoogleDatabaseStatus;
+  autoSyncStatus?: 'idle' | 'syncing' | 'saved' | 'error';
+  lastAutoSyncTime?: string | null;
   onSwitchUser: (userId: string) => void;
   onNavigateTab: (tabId: string) => void;
   onSelectNotificationItem: (item: DueNotification) => void;
-  onOpenLogin: () => void;
+  onLogout: () => void;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -35,10 +39,12 @@ export const Navbar: React.FC<NavbarProps> = ({
   allUsers,
   notifications,
   googleStatus,
+  autoSyncStatus = 'idle',
+  lastAutoSyncTime,
   onSwitchUser,
   onNavigateTab,
   onSelectNotificationItem,
-  onOpenLogin,
+  onLogout,
 }) => {
   const [showNotifPopover, setShowNotifPopover] = useState(false);
   const [showUserDropdown, setShowUserDropdown] = useState(false);
@@ -50,13 +56,13 @@ export const Navbar: React.FC<NavbarProps> = ({
   const getRoleBadge = (role: UserRole) => {
     switch (role) {
       case 'super_admin':
-        return { label: 'Owner / Direktur (Seluruh Data)', color: 'bg-indigo-50 text-indigo-700 border-indigo-200' };
+        return { label: 'Owner / Direktur', color: 'bg-indigo-50 text-indigo-700 border-indigo-200' };
       case 'finance_manager':
-        return { label: 'Manajer Keuangan (Seluruh Data)', color: 'bg-emerald-50 text-emerald-700 border-emerald-200' };
+        return { label: 'Manajer Keuangan', color: 'bg-emerald-50 text-emerald-700 border-emerald-200' };
       case 'cashier_staff':
-        return { label: 'Karyawan Biasa (Akses Operasional)', color: 'bg-teal-50 text-teal-700 border-teal-200' };
+        return { label: 'Staf Kasir', color: 'bg-teal-50 text-teal-700 border-teal-200' };
       case 'auditor':
-        return { label: 'Auditor Eksternal (Read-Only)', color: 'bg-amber-50 text-amber-700 border-amber-200' };
+        return { label: 'Auditor Eksternal', color: 'bg-amber-50 text-amber-700 border-amber-200' };
       default:
         return { label: role, color: 'bg-slate-50 text-slate-700 border-slate-200' };
     }
@@ -95,16 +101,45 @@ export const Navbar: React.FC<NavbarProps> = ({
 
         {/* Right Controls */}
         <div className="flex items-center gap-2 sm:gap-3">
-          {/* Cloud Google Sheets Badge (Hidden as requested: 'tampikan sheet vol 1 hide aja') */}
+          {/* Cloud Google Sheets Auto-Sync Indicator */}
+          {googleStatus?.isConnected && (
+            <div
+              className={`hidden md:flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-[11px] font-semibold transition-all ${
+                autoSyncStatus === 'syncing'
+                  ? 'bg-amber-50 text-amber-800 border border-amber-200'
+                  : autoSyncStatus === 'saved'
+                  ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
+                  : 'bg-teal-50/80 text-teal-800 border border-teal-200/60'
+              }`}
+              title="Setiap transaksi SIMRS, pengeluaran, utang & kas otomatis tersinkron langsung ke Google Sheets secara real-time"
+            >
+              {autoSyncStatus === 'syncing' ? (
+                <>
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin text-amber-600" />
+                  <span>Menyimpan ke Sheets...</span>
+                </>
+              ) : autoSyncStatus === 'saved' ? (
+                <>
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                  <span>Tersimpan di Google Sheets</span>
+                </>
+              ) : (
+                <>
+                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                  <span>Auto-Sync Sheets Aktif</span>
+                </>
+              )}
+            </div>
+          )}
 
-          {/* Button to view Login Screen & User Passwords */}
+          {/* Button to Logout / Switch Account */}
           <button
-            onClick={onOpenLogin}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold text-slate-700 bg-teal-50/80 hover:bg-teal-100 text-teal-800 border border-teal-200/80 transition-colors"
-            title="Buka Tampilan Login & Daftar Password Akun"
+            onClick={onLogout}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 transition-colors cursor-pointer"
+            title="Keluar dari sesi akun"
           >
-            <LogIn className="w-3.5 h-3.5 text-teal-700" />
-            <span className="hidden sm:inline">Halaman Login</span>
+            <LogOut className="w-3.5 h-3.5 text-rose-600" />
+            <span className="hidden sm:inline">Keluar</span>
           </button>
 
           {/* Quick Print A4 Shortcut */}
@@ -269,10 +304,10 @@ export const Navbar: React.FC<NavbarProps> = ({
               <div className="absolute right-0 mt-2 w-72 bg-white rounded-2xl shadow-2xl border border-slate-200 p-2 z-50">
                 <div className="p-2 border-b border-slate-100 mb-1">
                   <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
-                    Ganti Sesi Staf Keuangan (RBAC Demo)
+                    Ganti Sesi Staf Keuangan
                   </p>
                   <p className="text-xs text-slate-600 mt-0.5">
-                    Pilih akun staf untuk menguji hak akses otorisasi sistem.
+                    Pilih akun staf untuk berpindah sesi kerja sistem.
                   </p>
                 </div>
 
@@ -330,12 +365,12 @@ export const Navbar: React.FC<NavbarProps> = ({
                   <button
                     onClick={() => {
                       setShowUserDropdown(false);
-                      onOpenLogin();
+                      onLogout();
                     }}
-                    className="w-full flex items-center justify-center gap-1.5 p-1.5 rounded-lg text-xs font-semibold text-rose-600 hover:bg-rose-50 transition-colors"
+                    className="w-full flex items-center justify-center gap-1.5 p-1.5 rounded-lg text-xs font-semibold text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
                   >
                     <LogOut className="w-3.5 h-3.5" />
-                    <span>Keluar / Tampilan Login</span>
+                    <span>Keluar dari Akun</span>
                   </button>
                 </div>
               </div>

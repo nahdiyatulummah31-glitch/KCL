@@ -194,17 +194,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       {/* Header & Quick Action Row */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
-          <h2 className="text-xl font-bold text-slate-900 tracking-tight flex items-center gap-2">
+          <h2 className="text-xl font-bold text-slate-900 tracking-tight">
             <span>Dasbor Analisis {isSuperOrManager ? 'Keuangan & SIMRS' : 'Pemasukan Kasir Klinik'}</span>
-            {isSuperOrManager ? (
-              <span className="text-[10px] font-semibold text-teal-800 bg-teal-50 border border-teal-200 px-2 py-0.5 rounded-md hidden sm:inline">
-                Owner & Manajer
-              </span>
-            ) : (
-              <span className="text-[10px] font-semibold text-amber-800 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-md hidden sm:inline">
-                Karyawan Biasa
-              </span>
-            )}
           </h2>
         </div>
 

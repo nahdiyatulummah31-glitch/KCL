@@ -73,12 +73,12 @@ export const GoogleWorkspacePanel: React.FC<GoogleWorkspacePanelProps> = ({
               {status.isConnected && (
                 <span className="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-100 text-emerald-800 flex items-center gap-1">
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 animate-pulse"></span>
-                  Terhubung
+                  Terhubung & Auto-Sync Aktif
                 </span>
               )}
             </h3>
             <p className="text-xs text-slate-500">
-              Penyimpanan data otomatis di Google Sheets dan berkas nota/PDF di Google Drive.
+              Sinkronisasi otomatis aktif: Setiap kali Anda menginput data, transaksi otomatis tersimpan ke Google Sheets tanpa perlu klik sinkron.
             </p>
           </div>
         </div>
@@ -164,7 +164,7 @@ export const GoogleWorkspacePanel: React.FC<GoogleWorkspacePanelProps> = ({
             <div className="p-3 bg-white rounded-lg border border-slate-200">
               <span className="text-[11px] font-bold text-slate-800 block">Google Drive Berkas</span>
               <span className="text-[11px] text-slate-500">
-                Folder khusus untuk mengunggah bukti nota, struk, dan PDF.
+                Folder penyimpanan bukti nota, struk, dan PDF.
               </span>
             </div>
             <div className="p-3 bg-white rounded-lg border border-slate-200">

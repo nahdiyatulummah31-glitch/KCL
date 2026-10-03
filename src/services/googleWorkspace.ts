@@ -19,8 +19,18 @@ import {
   GoogleDriveFile,
 } from '../types';
 
-// Initialize Firebase App
-const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
+// Initialize Firebase App with environment variables support for GitHub/custom deployments
+const firebaseConfigMerged = {
+  projectId: (import.meta as any).env?.VITE_FIREBASE_PROJECT_ID || firebaseConfig.projectId,
+  appId: (import.meta as any).env?.VITE_FIREBASE_APP_ID || firebaseConfig.appId,
+  apiKey: (import.meta as any).env?.VITE_FIREBASE_API_KEY || firebaseConfig.apiKey,
+  authDomain: (import.meta as any).env?.VITE_FIREBASE_AUTH_DOMAIN || firebaseConfig.authDomain,
+  storageBucket: (import.meta as any).env?.VITE_FIREBASE_STORAGE_BUCKET || firebaseConfig.storageBucket,
+  messagingSenderId: (import.meta as any).env?.VITE_FIREBASE_MESSAGING_SENDER_ID || firebaseConfig.messagingSenderId,
+  oAuthClientId: (import.meta as any).env?.VITE_FIREBASE_OAUTH_CLIENT_ID || (firebaseConfig as any).oAuthClientId,
+};
+
+const app = getApps().length === 0 ? initializeApp(firebaseConfigMerged) : getApp();
 export const auth = getAuth(app);
 
 // Configure Google Auth Provider with Workspace Scopes
@@ -91,10 +101,14 @@ export const googleSignIn = async (): Promise<{ user: User; accessToken: string 
     isSigningIn = true;
     const result = await signInWithPopup(auth, provider);
     const credential = GoogleAuthProvider.credentialFromResult(result);
-    if (!credential?.accessToken) {
-      throw new Error('Gagal mendapatkan token otentikasi Google Workspace.');
+    let accessToken = credential?.accessToken;
+    if (!accessToken) {
+      accessToken = await result.user.getIdToken();
     }
-    cachedAccessToken = credential.accessToken;
+    if (!accessToken) {
+      throw new Error('Gagal mendapatkan token otentikasi Google.');
+    }
+    cachedAccessToken = accessToken;
     try {
       localStorage.setItem(GOOGLE_TOKEN_KEY, cachedAccessToken);
       // Valid for ~1 hour (3500 seconds)
@@ -104,8 +118,21 @@ export const googleSignIn = async (): Promise<{ user: User; accessToken: string 
     }
     return { user: result.user, accessToken: cachedAccessToken };
   } catch (err: any) {
+    const currentHost = typeof window !== 'undefined' ? window.location.hostname : 'domain Anda';
+    if (err?.code === 'auth/unauthorized-domain') {
+      err.friendlyMessage = `Domain "${currentHost}" belum didaftarkan di Firebase Console. Untuk mengaktifkan: Tambahkan "${currentHost}" ke Firebase Console > Authentication > Settings > Authorized domains.`;
+      err.unauthorizedDomain = currentHost;
+    } else if (err?.code === 'auth/popup-blocked') {
+      err.friendlyMessage = 'Popup Google Sign-in diblokir oleh browser. Izinkan pop-up untuk situs ini lalu coba lagi.';
+    } else if (err?.code === 'auth/popup-closed-by-user' || err?.code === 'auth/cancelled-popup-request') {
+      err.friendlyMessage = 'Proses login Google dibatalkan.';
+    } else if (err?.code === 'auth/network-request-failed') {
+      err.friendlyMessage = 'Gagal menghubungi server Google. Periksa koneksi internet Anda.';
+    } else if (err?.code === 'auth/operation-not-allowed') {
+      err.friendlyMessage = 'Metode Google Sign-In belum diaktifkan di Firebase Console Authentication.';
+    }
     if (err?.code !== 'auth/popup-closed-by-user' && err?.code !== 'auth/cancelled-popup-request') {
-      console.warn('Sign-in error:', err);
+      console.warn('Google Sign-in error details:', err);
     }
     throw err;
   } finally {
@@ -295,7 +322,6 @@ export async function createDatabaseSpreadsheet(
   const createBody = {
     properties: {
       title,
-      locale: 'id_ID',
       timeZone: 'Asia/Jakarta',
     },
     sheets: [
@@ -354,8 +380,16 @@ export async function createDatabaseSpreadsheet(
   });
 
   if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`Gagal membuat spreadsheet Google Sheets: ${err}`);
+    let errMsg = await res.text();
+    try {
+      const parsed = JSON.parse(errMsg);
+      if (parsed.error?.message) {
+        errMsg = parsed.error.message;
+      }
+    } catch {
+      // keep text
+    }
+    throw new Error(`Gagal membuat spreadsheet Google Sheets: ${errMsg}`);
   }
 
   const sheetData = await res.json();

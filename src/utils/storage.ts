@@ -44,6 +44,7 @@ export const STORAGE_KEYS = {
   RECONCILIATION: 'klinik_finance_reconciliation_v3',
   SALARIES: 'klinik_finance_salaries_v3',
   GOOGLE_STATUS: 'klinik_finance_google_status_v3',
+  IS_LOGGED_IN: 'klinik_finance_is_logged_in_v3',
 };
 
 export const getStoredItem = <T>(key: string, defaultValue: T): T => {
@@ -81,11 +82,13 @@ export const loadAllData = () => {
   const assets = getStoredItem<ClinicAsset[]>(STORAGE_KEYS.ASSETS, INITIAL_ASSETS);
   const reconciliations = getStoredItem<DailyCashReconciliation[]>(STORAGE_KEYS.RECONCILIATION, INITIAL_RECONCILIATIONS);
   const salaries = getStoredItem<EmployeeSalaryRecord[]>(STORAGE_KEYS.SALARIES, INITIAL_SALARY_RECORDS);
+  const isLoggedIn = getStoredItem<boolean>(STORAGE_KEYS.IS_LOGGED_IN, false);
 
   return {
     profile,
     users,
     activeUserId,
+    isLoggedIn,
     simrs,
     cashflow,
     expenses,

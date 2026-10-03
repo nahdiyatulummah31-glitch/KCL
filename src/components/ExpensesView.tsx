@@ -687,7 +687,7 @@ export const ExpensesView: React.FC<ExpensesViewProps> = ({
                     : item.title;
 
                   const displayDesc = isShielded
-                    ? '🔒 Rincian per nama karyawan terproteksi otorisasi khusus Pimpinan & Bagian Keuangan.'
+                    ? '🔒 Rincian gaji karyawan terproteksi otorisasi Pimpinan.'
                     : item.description;
 
                   const displayVendor = isShielded

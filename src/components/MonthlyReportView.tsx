@@ -188,6 +188,7 @@ export const MonthlyReportView: React.FC<MonthlyReportViewProps> = ({
   // Key totals
   const totalPatientCount = filteredTransactions.length;
   const totalRevenue = filteredTransactions.reduce((acc, t) => acc + t.totalAmount, 0);
+  const totalDiscount = filteredTransactions.reduce((acc, t) => acc + (t.discount || 0), 0);
   const totalCashCollected = filteredTransactions.reduce((acc, t) => acc + t.cashierReceived, 0);
   const totalExpenses = filteredExpenses.reduce((acc, e) => acc + e.amount, 0);
   const netIncome = totalCashCollected - totalExpenses;
@@ -220,6 +221,7 @@ export const MonthlyReportView: React.FC<MonthlyReportViewProps> = ({
         transfer: number;
         qris: number;
         bpjs: number;
+        discount: number;
         total: number;
       }
     > = {};
@@ -233,6 +235,7 @@ export const MonthlyReportView: React.FC<MonthlyReportViewProps> = ({
         transfer: 0,
         qris: 0,
         bpjs: 0,
+        discount: 0,
         total: 0,
       };
     });
@@ -248,12 +251,14 @@ export const MonthlyReportView: React.FC<MonthlyReportViewProps> = ({
           transfer: 0,
           qris: 0,
           bpjs: 0,
+          discount: 0,
           total: 0,
         };
       }
 
       map[deptKey].patientCount += 1;
       map[deptKey].total += t.totalAmount;
+      map[deptKey].discount += (t.discount || 0);
 
       if (t.paymentMethod === 'Tunai') {
         map[deptKey].cash += t.cashierReceived;
@@ -714,67 +719,79 @@ export const MonthlyReportView: React.FC<MonthlyReportViewProps> = ({
       </div>
 
       {/* Primary Key Indicator Cards - WITH COLOR AS REQUESTED */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-3.5">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3.5">
         {/* Card 1: Pasien (Sky / Biru Cerah) */}
         <div className="bg-sky-50/90 p-4 rounded-2xl border-2 border-sky-300 shadow-xs hover:border-sky-400 transition-colors">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-bold text-sky-800 uppercase tracking-wider">Jumlah Pasien</span>
-            <div className="w-8 h-8 rounded-lg bg-sky-100 text-sky-700 flex items-center justify-center border border-sky-300">
-              <Users className="w-4 h-4" />
+            <span className="text-xs font-bold text-sky-800 uppercase tracking-wider">Pasien</span>
+            <div className="w-7 h-7 rounded-lg bg-sky-100 text-sky-700 flex items-center justify-center border border-sky-300">
+              <Users className="w-3.5 h-3.5" />
             </div>
           </div>
-          <div className="mt-2 flex items-baseline gap-1.5">
+          <div className="mt-2 flex items-baseline gap-1">
             <span className="text-2xl font-black text-sky-950 font-mono">{totalPatientCount}</span>
             <span className="text-xs text-sky-800 font-bold">Orang</span>
           </div>
-          <span className="text-[11px] text-sky-700 mt-1 block font-medium">Pasien terlayani SIMRS</span>
+          <span className="text-[11px] text-sky-700 mt-1 block font-medium">Pasien terlayani</span>
         </div>
 
         {/* Card 2: Total Billing (Orange Pastel) */}
         <div className="bg-orange-50/90 p-4 rounded-2xl border-2 border-orange-300 shadow-xs hover:border-orange-400 transition-colors">
           <div className="flex items-center justify-between">
             <span className="text-xs font-bold text-orange-800 uppercase tracking-wider">Total Billing</span>
-            <div className="w-8 h-8 rounded-lg bg-orange-100 text-orange-700 flex items-center justify-center border border-orange-300">
-              <TrendingUp className="w-4 h-4" />
+            <div className="w-7 h-7 rounded-lg bg-orange-100 text-orange-700 flex items-center justify-center border border-orange-300">
+              <TrendingUp className="w-3.5 h-3.5" />
             </div>
           </div>
-          <div className="mt-2 text-lg font-black text-orange-950 font-mono">{formatRupiah(totalRevenue)}</div>
-          <span className="text-[11px] text-orange-700 mt-1 block font-medium">Seluruh tagihan layanan</span>
+          <div className="mt-2 text-base font-black text-orange-950 font-mono">{formatRupiah(totalRevenue)}</div>
+          <span className="text-[11px] text-orange-700 mt-1 block font-medium">Tagihan SIMRS</span>
         </div>
 
-        {/* Card 3: Penerimaan Kasir (Hijau Cerah) */}
-        <div className="bg-emerald-50/90 p-4 rounded-2xl border-2 border-emerald-400 shadow-xs hover:border-emerald-500 transition-colors">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-bold text-emerald-800 uppercase tracking-wider">Penerimaan Kasir</span>
-            <div className="w-8 h-8 rounded-lg bg-emerald-100 text-emerald-700 flex items-center justify-center border border-emerald-300">
-              <Wallet className="w-4 h-4" />
-            </div>
-          </div>
-          <div className="mt-2 text-lg font-black text-emerald-950 font-mono">{formatRupiah(totalCashCollected)}</div>
-          <span className="text-[11px] text-emerald-700 mt-1 block font-medium">Tunai + Transfer + QRIS</span>
-        </div>
-
-        {/* Card 4: Total Pengeluaran (Merah Cerah) */}
+        {/* Card 3: Total Diskon (Rose Pastel) */}
         <div className="bg-rose-50/90 p-4 rounded-2xl border-2 border-rose-300 shadow-xs hover:border-rose-400 transition-colors">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-bold text-rose-800 uppercase tracking-wider">Total Pengeluaran</span>
-            <div className="w-8 h-8 rounded-lg bg-rose-100 text-rose-700 flex items-center justify-center border border-rose-300">
-              <TrendingDown className="w-4 h-4" />
+            <span className="text-xs font-bold text-rose-800 uppercase tracking-wider">Total Diskon</span>
+            <div className="w-7 h-7 rounded-lg bg-rose-100 text-rose-700 flex items-center justify-center border border-rose-300">
+              <span className="text-xs font-bold font-mono">%</span>
             </div>
           </div>
-          <div className="mt-2 text-lg font-black text-rose-950 font-mono">{formatRupiah(totalExpenses)}</div>
-          <span className="text-[11px] text-rose-700 mt-1 block font-medium">{filteredExpenses.length} transaksi nota</span>
+          <div className="mt-2 text-base font-black text-rose-900 font-mono">-{formatRupiah(totalDiscount)}</div>
+          <span className="text-[11px] text-rose-700 mt-1 block font-medium">Potongan tarif</span>
         </div>
 
-        {/* Card 5: Sisa Kas Bersih (Indigo / Violet Pastel) */}
-        <div className="col-span-2 md:col-span-1 bg-indigo-50/90 p-4 rounded-2xl border-2 border-indigo-300 shadow-xs hover:border-indigo-400 transition-colors">
+        {/* Card 4: Penerimaan Kasir (Hijau Cerah) */}
+        <div className="bg-emerald-50/90 p-4 rounded-2xl border-2 border-emerald-400 shadow-xs hover:border-emerald-500 transition-colors">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-bold text-indigo-800 uppercase tracking-wider">Sisa Kas Bersih</span>
-            <div className="w-8 h-8 rounded-lg bg-indigo-100 text-indigo-700 flex items-center justify-center border border-indigo-300">
-              <CheckCircle2 className="w-4 h-4" />
+            <span className="text-xs font-bold text-emerald-800 uppercase tracking-wider">Penerimaan</span>
+            <div className="w-7 h-7 rounded-lg bg-emerald-100 text-emerald-700 flex items-center justify-center border border-emerald-300">
+              <Wallet className="w-3.5 h-3.5" />
             </div>
           </div>
-          <div className={`mt-2 text-lg font-black font-mono ${netIncome >= 0 ? 'text-indigo-950' : 'text-rose-700'}`}>
+          <div className="mt-2 text-base font-black text-emerald-950 font-mono">{formatRupiah(totalCashCollected)}</div>
+          <span className="text-[11px] text-emerald-700 mt-1 block font-medium">Kasir diterima</span>
+        </div>
+
+        {/* Card 5: Total Pengeluaran (Merah Cerah) */}
+        <div className="bg-amber-50/90 p-4 rounded-2xl border-2 border-amber-300 shadow-xs hover:border-amber-400 transition-colors">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-bold text-amber-800 uppercase tracking-wider">Pengeluaran</span>
+            <div className="w-7 h-7 rounded-lg bg-amber-100 text-amber-700 flex items-center justify-center border border-amber-300">
+              <TrendingDown className="w-3.5 h-3.5" />
+            </div>
+          </div>
+          <div className="mt-2 text-base font-black text-amber-950 font-mono">{formatRupiah(totalExpenses)}</div>
+          <span className="text-[11px] text-amber-700 mt-1 block font-medium">{filteredExpenses.length} nota beban</span>
+        </div>
+
+        {/* Card 6: Sisa Kas Bersih (Indigo / Violet Pastel) */}
+        <div className="bg-indigo-50/90 p-4 rounded-2xl border-2 border-indigo-300 shadow-xs hover:border-indigo-400 transition-colors">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-bold text-indigo-800 uppercase tracking-wider">Sisa Bersih</span>
+            <div className="w-7 h-7 rounded-lg bg-indigo-100 text-indigo-700 flex items-center justify-center border border-indigo-300">
+              <CheckCircle2 className="w-3.5 h-3.5" />
+            </div>
+          </div>
+          <div className={`mt-2 text-base font-black font-mono ${netIncome >= 0 ? 'text-indigo-950' : 'text-rose-700'}`}>
             {formatRupiah(netIncome)}
           </div>
           <span className="text-[11px] text-indigo-700 mt-1 block font-medium">Penerimaan - Beban</span>
@@ -814,7 +831,8 @@ export const MonthlyReportView: React.FC<MonthlyReportViewProps> = ({
                 <th className="px-4 py-3 text-right">Transfer Bank</th>
                 <th className="px-4 py-3 text-right">QRIS / EDC</th>
                 <th className="px-4 py-3 text-right">Klaim BPJS / Piutang</th>
-                <th className="px-4 py-3 text-right font-black">Total Pendapatan</th>
+                <th className="px-4 py-3 text-right bg-rose-50 text-rose-800">Diskon</th>
+                <th className="px-4 py-3 text-right font-black">Total Billing</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -854,6 +872,9 @@ export const MonthlyReportView: React.FC<MonthlyReportViewProps> = ({
                   <td className="px-4 py-3 text-right font-mono text-amber-700">
                     {item.bpjs > 0 ? formatRupiah(item.bpjs) : '-'}
                   </td>
+                  <td className="px-4 py-3 text-right font-mono text-rose-700 bg-rose-50/30">
+                    {item.discount > 0 ? `-${formatRupiah(item.discount)}` : '-'}
+                  </td>
                   <td className="px-4 py-3 text-right font-bold font-mono text-slate-900">
                     {formatRupiah(item.total)}
                   </td>
@@ -871,6 +892,9 @@ export const MonthlyReportView: React.FC<MonthlyReportViewProps> = ({
                 <td className="px-4 py-3 text-right font-mono">{formatRupiah(totalQris)}</td>
                 <td className="px-4 py-3 text-right font-mono text-amber-800">
                   {formatRupiah(totalBpjsPiutang)}
+                </td>
+                <td className="px-4 py-3 text-right font-mono text-rose-800 bg-rose-50/50">
+                  -{formatRupiah(totalDiscount)}
                 </td>
                 <td className="px-4 py-3 text-right font-mono text-sm font-black text-teal-900">
                   {formatRupiah(totalRevenue)}
@@ -920,7 +944,7 @@ export const MonthlyReportView: React.FC<MonthlyReportViewProps> = ({
                   : exp.title;
 
                 const displayDesc = isShielded
-                  ? '🔒 Rincian slip per nama karyawan terproteksi otorisasi khusus Pimpinan & Bagian Keuangan.'
+                  ? '🔒 Rincian gaji terproteksi otorisasi Pimpinan.'
                   : exp.description;
 
                 const displayVendor = isShielded

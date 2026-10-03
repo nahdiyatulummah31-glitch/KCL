@@ -26,7 +26,7 @@ export const RestrictedAccessView: React.FC<RestrictedAccessViewProps> = ({
       <div className="space-y-2">
         <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider bg-rose-50 text-rose-700 border border-rose-200">
           <ShieldAlert className="w-3.5 h-3.5" />
-          Akses Terbatas: Khusus Owner & Manajer
+          Akses Terbatas: Otorisasi Pimpinan
         </span>
         <h2 className="text-xl sm:text-2xl font-black text-slate-900 tracking-tight">
           Halaman &ldquo;{featureTitle}&rdquo; Dibatasi
@@ -46,7 +46,7 @@ export const RestrictedAccessView: React.FC<RestrictedAccessViewProps> = ({
             Akun Anda Saat Ini
           </span>
           <span className="px-2 py-0.5 rounded-md text-[11px] font-bold bg-sky-100 text-sky-800 border border-sky-200">
-            Karyawan Biasa / Kasir
+            Staf Kasir
           </span>
         </div>
         <p className="text-sm font-bold text-slate-800">
@@ -55,7 +55,7 @@ export const RestrictedAccessView: React.FC<RestrictedAccessViewProps> = ({
         <div className="flex items-center gap-2 pt-2 border-t border-slate-200 text-xs text-emerald-700 font-medium">
           <Calendar className="w-4 h-4 shrink-0 text-emerald-600" />
           <span>
-            Hak Akses Anda: Melihat data pemasukan klinik untuk <strong>hari ini dan 2 hari sebelumnya</strong>.
+            Hak Akses Anda: Melihat data pemasukan operasional klinik.
           </span>
         </div>
       </div>
@@ -64,10 +64,10 @@ export const RestrictedAccessView: React.FC<RestrictedAccessViewProps> = ({
       <div className="flex flex-col sm:flex-row items-center justify-center gap-3 pt-2">
         <button
           onClick={onGoToAllowed}
-          className="w-full sm:w-auto px-5 py-2.5 rounded-xl bg-teal-700 hover:bg-teal-800 text-white font-bold text-xs sm:text-sm flex items-center justify-center gap-2 shadow-sm transition-all"
+          className="w-full sm:w-auto px-5 py-2.5 rounded-xl bg-teal-700 hover:bg-teal-800 text-white font-bold text-xs sm:text-sm flex items-center justify-center gap-2 shadow-sm transition-all cursor-pointer"
         >
           <ArrowLeft className="w-4 h-4" />
-          <span>Lihat Pemasukan Hari Ini & 2 Hari Lalu</span>
+          <span>Kembali ke Dasbor</span>
         </button>
 
         {onOpenLogin && (
