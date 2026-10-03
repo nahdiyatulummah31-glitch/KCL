@@ -10,6 +10,7 @@ import {
   LogOut,
   Layers,
   Sparkles,
+  CloudDownload,
 } from 'lucide-react';
 import { GoogleDatabaseStatus } from '../types';
 
@@ -18,6 +19,7 @@ interface GoogleWorkspacePanelProps {
   onConnectGoogle: () => Promise<void>;
   onDisconnectGoogle: () => Promise<void>;
   onSyncAll: () => Promise<void>;
+  onRestoreData?: () => Promise<void>;
   isSyncing: boolean;
   syncProgress?: { message: string; percent: number };
 }
@@ -27,6 +29,7 @@ export const GoogleWorkspacePanel: React.FC<GoogleWorkspacePanelProps> = ({
   onConnectGoogle,
   onDisconnectGoogle,
   onSyncAll,
+  onRestoreData,
   isSyncing,
   syncProgress,
 }) => {
@@ -84,7 +87,18 @@ export const GoogleWorkspacePanel: React.FC<GoogleWorkspacePanelProps> = ({
         </div>
 
         {status.isConnected && (
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
+            {onRestoreData && (
+              <button
+                onClick={onRestoreData}
+                disabled={isSyncing}
+                className="flex items-center gap-1.5 px-3.5 py-2 bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 rounded-xl text-xs font-semibold transition-all shadow-xs cursor-pointer"
+                title="Tarik dan pulihkan data transaksi dari spreadsheet Google ke aplikasi ini"
+              >
+                <CloudDownload className="w-3.5 h-3.5 text-teal-600" />
+                <span>Tarik / Pulihkan Data</span>
+              </button>
+            )}
             <button
               onClick={onSyncAll}
               disabled={isSyncing}
@@ -118,10 +132,10 @@ export const GoogleWorkspacePanel: React.FC<GoogleWorkspacePanelProps> = ({
         <div className="bg-slate-50 border border-slate-200 rounded-xl p-6 text-center space-y-4">
           <div className="max-w-md mx-auto space-y-2">
             <h4 className="text-sm font-bold text-slate-800">
-              Hubungkan Akun Google untuk Database Otomatis
+              Hubungkan Akun Google untuk Sinkronisasi Otomatis
             </h4>
             <p className="text-xs text-slate-500 leading-relaxed">
-              Sistem akan otomatis membuat file Google Spreadsheet dan folder Google Drive. Seluruh transaksi kasir, beban, hutang, serta foto kuitansi/PDF akan tersimpan dan tersinkronisasi.
+              Jika Anda membuka aplikasi ini di perangkat baru atau domain Vercel, cukup klik <strong>Sign in with Google</strong> di bawah. Sistem akan otomatis memulihkan seluruh data transaksi dan pengeluaran yang tersimpan di Google Sheets Anda!
             </p>
           </div>
 

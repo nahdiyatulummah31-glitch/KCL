@@ -41,6 +41,7 @@ interface SettingsViewProps {
   onConnectGoogle: () => Promise<void>;
   onDisconnectGoogle: () => Promise<void>;
   onSyncGoogle: () => Promise<void>;
+  onRestoreGoogle?: () => Promise<void>;
   isSyncingGoogle: boolean;
   syncProgress?: { message: string; percent: number };
 }
@@ -56,6 +57,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   onConnectGoogle,
   onDisconnectGoogle,
   onSyncGoogle,
+  onRestoreGoogle,
   isSyncingGoogle,
   syncProgress,
 }) => {
@@ -1000,6 +1002,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             onConnectGoogle={onConnectGoogle}
             onDisconnectGoogle={onDisconnectGoogle}
             onSyncAll={onSyncGoogle}
+            onRestoreData={onRestoreGoogle}
             isSyncing={isSyncingGoogle}
             syncProgress={syncProgress}
           />

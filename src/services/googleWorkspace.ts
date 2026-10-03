@@ -753,3 +753,206 @@ export async function syncAllToGoogleDatabase(
     lastSyncStatus: 'success',
   };
 }
+
+export interface PulledDatabaseData {
+  transactions: SimrsTransaction[];
+  expenses: ExpenseEntry[];
+  debts: DebtEntry[];
+  receivables: ReceivableEntry[];
+  inventory: ClinicAsset[];
+  cashFlow: CashFlowEntry[];
+  status: GoogleDatabaseStatus;
+}
+
+export async function loadAllFromGoogleDatabase(
+  spreadsheetIdOverride?: string,
+  onProgress?: (progress: { message: string; percent: number }) => void
+): Promise<PulledDatabaseData | null> {
+  const token = await getAccessToken();
+  if (!token) throw new Error('Akses Google belum terhubung.');
+
+  onProgress?.({ message: 'Mencari database spreadsheet di Google Drive...', percent: 20 });
+
+  let targetSpreadsheetId = spreadsheetIdOverride;
+
+  // Search Drive if ID not known
+  if (!targetSpreadsheetId) {
+    try {
+      const q = `name contains 'Klinik_Finance_DB' and mimeType='application/vnd.google-apps.spreadsheet' and trashed=false`;
+      const searchRes = await fetch(
+        `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&orderBy=createdTime desc&fields=files(id,name,webViewLink)`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      if (searchRes.ok) {
+        const searchData = await searchRes.json();
+        if (searchData.files && searchData.files.length > 0) {
+          targetSpreadsheetId = searchData.files[0].id;
+        }
+      }
+    } catch (e) {
+      console.warn('Could not search Drive for DB:', e);
+    }
+  }
+
+  if (!targetSpreadsheetId) {
+    return null;
+  }
+
+  onProgress?.({ message: 'Mengambil data dari tabel Google Sheets...', percent: 50 });
+
+  // Read all ranges using batchGet
+  const ranges = [
+    'SIMRS_Transactions!A2:M',
+    'Beban_Operasional!A2:K',
+    'Hutang_Vendor!A2:J',
+    'Piutang_Klaim_BPJS!A2:L',
+    'Inventory_Obat_Alkes!A2:I',
+    'Cash_Ledger_Mutasi!A2:H',
+  ];
+
+  const batchUrl = `https://sheets.googleapis.com/v4/spreadsheets/${targetSpreadsheetId}/values:batchGet?${ranges
+    .map((r) => `ranges=${encodeURIComponent(r)}`)
+    .join('&')}`;
+
+  const batchRes = await fetch(batchUrl, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+
+  if (!batchRes.ok) {
+    const errText = await batchRes.text();
+    throw new Error(`Gagal membaca data dari Google Sheets: ${errText}`);
+  }
+
+  const batchData = await batchRes.json();
+  const valueRanges = batchData.valueRanges || [];
+
+  // Parse SIMRS_Transactions
+  const simrsRows = valueRanges[0]?.values || [];
+  const transactions: SimrsTransaction[] = simrsRows
+    .filter((r: any[]) => r && r.length > 0 && r[0])
+    .map((r: any[], idx: number) => ({
+      id: `simrs-cloud-${idx}-${r[0] || Date.now()}`,
+      invoiceNo: r[0] || `INV-PULL-${idx}`,
+      billingTime: r[1] || new Date().toISOString(),
+      patientRm: r[2] || '-',
+      patientName: r[3] || 'Pasien',
+      department: r[4] || 'Poli Umum',
+      doctorName: r[5] || 'Dokter Jaga',
+      paymentMethod: r[6] || 'Tunai',
+      totalAmount: parseFloat(String(r[7] || 0).replace(/[^0-9.-]/g, '')) || 0,
+      cashierReceived: parseFloat(String(r[8] || r[7] || 0).replace(/[^0-9.-]/g, '')) || 0,
+      shift: (r[10] as any) || 'Pagi',
+      cashierName: r[11] || 'Kasir',
+      notes: r[12] || '',
+      isTransferredToCashflow: true,
+    }));
+
+  // Parse Beban_Operasional
+  const expenseRows = valueRanges[1]?.values || [];
+  const expenses: ExpenseEntry[] = expenseRows
+    .filter((r: any[]) => r && r.length > 0 && r[0])
+    .map((r: any[], idx: number) => ({
+      id: r[0] || `exp-cloud-${idx}`,
+      invoiceNumber: r[1] && r[1] !== '-' ? r[1] : undefined,
+      date: r[2] || new Date().toISOString().slice(0, 10),
+      category: (r[3] as any) || 'Operasional',
+      title: r[4] || 'Pengeluaran',
+      description: r[4] || 'Beban Klinik',
+      amount: parseFloat(String(r[5] || 0).replace(/[^0-9.-]/g, '')) || 0,
+      payFromAccount: r[6] || 'Kas Kasir (Tunai)',
+      createdBy: r[7] || 'Staf Keuangan',
+      vendorName: r[8] && r[8] !== '-' ? r[8] : undefined,
+      receiptUrl: r[10] && r[10] !== '-' ? r[10] : undefined,
+    }));
+
+  // Parse Hutang_Vendor
+  const debtRows = valueRanges[2]?.values || [];
+  const debts: DebtEntry[] = debtRows
+    .filter((r: any[]) => r && r.length > 0 && r[0])
+    .map((r: any[], idx: number) => ({
+      id: r[0] || `debt-cloud-${idx}`,
+      creditorName: r[1] || 'Vendor',
+      invoiceNumber: r[2] || '-',
+      totalAmount: parseFloat(String(r[3] || 0).replace(/[^0-9.-]/g, '')) || 0,
+      paidAmount: parseFloat(String(r[4] || 0).replace(/[^0-9.-]/g, '')) || 0,
+      dueDate: r[6] || new Date().toISOString().slice(0, 10),
+      status: (r[7] as any) || 'unpaid',
+      lastPaymentDate: r[8] && r[8] !== '-' ? r[8] : undefined,
+      notes: r[9] && r[9] !== '-' ? r[9] : undefined,
+    }));
+
+  // Parse Piutang_Klaim_BPJS
+  const recRows = valueRanges[3]?.values || [];
+  const receivables: ReceivableEntry[] = recRows
+    .filter((r: any[]) => r && r.length > 0 && r[0])
+    .map((r: any[], idx: number) => ({
+      id: r[0] || `rec-cloud-${idx}`,
+      claimBatchNumber: r[1] || '-',
+      debtorName: r[2] || 'BPJS Kesehatan',
+      claimDate: r[3] || new Date().toISOString().slice(0, 10),
+      claimAmount: parseFloat(String(r[4] || 0).replace(/[^0-9.-]/g, '')) || 0,
+      receivedAmount: parseFloat(String(r[5] || 0).replace(/[^0-9.-]/g, '')) || 0,
+      status: (r[7] as any) || 'submitted',
+      expectedDueDate: r[8] || new Date().toISOString().slice(0, 10),
+      inkasoStatus: (r[9] as any) || 'belum_ditagih',
+      inkasoCollector: r[10] && r[10] !== '-' ? r[10] : undefined,
+      notes: r[11] && r[11] !== '-' ? r[11] : undefined,
+    }));
+
+  // Parse Inventory_Obat_Alkes
+  const invRows = valueRanges[4]?.values || [];
+  const inventory: ClinicAsset[] = invRows
+    .filter((r: any[]) => r && r.length > 0 && r[0])
+    .map((r: any[], idx: number) => ({
+      id: `asset-cloud-${idx}`,
+      assetCode: r[0] || `AST-${idx}`,
+      name: r[1] || 'Alat Medis',
+      category: (r[2] as any) || 'Medis',
+      location: r[3] || 'Poli',
+      condition: (r[4] as any) || 'Baik',
+      purchasePrice: parseFloat(String(r[5] || 0).replace(/[^0-9.-]/g, '')) || 0,
+      purchaseDate: r[6] || new Date().toISOString().slice(0, 10),
+      vendorName: r[7] && r[7] !== '-' ? r[7] : undefined,
+      personInCharge: r[8] || 'Perawat',
+    }));
+
+  // Parse Cash_Ledger_Mutasi
+  const cashRows = valueRanges[5]?.values || [];
+  const cashFlow: CashFlowEntry[] = cashRows
+    .filter((r: any[]) => r && r.length > 0 && r[0])
+    .map((r: any[], idx: number) => ({
+      id: r[0] || `mut-cloud-${idx}`,
+      date: r[1] || new Date().toISOString().slice(0, 10),
+      type: r[2]?.includes('Keluar') ? 'out' : 'in',
+      account: r[3] || 'Kas Kasir (Tunai)',
+      category: r[4] || 'Operasional',
+      description: r[5] || 'Mutasi Kas',
+      amount: parseFloat(String(r[6] || 0).replace(/[^0-9.-]/g, '')) || 0,
+      createdBy: r[7] || 'Staf',
+    }));
+
+  onProgress?.({ message: 'Data Google Sheets berhasil dipulihkan!', percent: 100 });
+
+  const totalCells = await getSpreadsheetTotalCells(targetSpreadsheetId);
+
+  return {
+    transactions,
+    expenses,
+    debts,
+    receivables,
+    inventory,
+    cashFlow,
+    status: {
+      isConnected: true,
+      spreadsheetId: targetSpreadsheetId,
+      spreadsheetUrl: `https://docs.google.com/spreadsheets/d/${targetSpreadsheetId}/edit`,
+      spreadsheetName: 'Klinik_Finance_DB_Vol1',
+      totalCellsUsed: totalCells,
+      maxCellsCapacity: MAX_CELLS_CAPACITY,
+      autoRolloverThreshold: AUTO_ROLLOVER_THRESHOLD,
+      volumeNumber: 1,
+      lastSyncedAt: new Date().toLocaleString('id-ID'),
+      lastSyncStatus: 'success',
+    },
+  };
+}

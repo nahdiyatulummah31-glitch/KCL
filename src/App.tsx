@@ -30,6 +30,7 @@ import {
   googleSignIn,
   logoutGoogle,
   syncAllToGoogleDatabase,
+  loadAllFromGoogleDatabase,
   getAccessToken,
   hasSavedGoogleToken,
 } from './services/googleWorkspace';
@@ -61,6 +62,13 @@ import { InkasoView } from './components/InkasoView';
 import { InventoryView } from './components/InventoryView';
 import { SalaryPayrollView } from './components/SalaryPayrollView';
 import { RestrictedAccessView } from './components/RestrictedAccessView';
+import { DatabaseSyncModal } from './components/DatabaseSyncModal';
+import {
+  FullClinicDatabase,
+  fetchFromCloudDatabase,
+  saveToCloudDatabase,
+  subscribeToCloudDatabase,
+} from './services/cloudDatabase';
 
 export default function App() {
   const initial = loadAllData();
@@ -97,47 +105,119 @@ export default function App() {
   const [syncProgress, setSyncProgress] = useState<{ message: string; percent: number } | undefined>(undefined);
   const [autoSyncStatus, setAutoSyncStatus] = useState<'idle' | 'syncing' | 'saved' | 'error'>('idle');
   const [lastAutoSyncTime, setLastAutoSyncTime] = useState<string | null>(null);
+  const [showDatabaseModal, setShowDatabaseModal] = useState<boolean>(false);
   const isInitialMount = useRef(true);
   const autoSyncTimerRef = useRef<any>(null);
 
-  // Background real-time auto-sync logic
+  // Background real-time auto-sync to Cloud Firestore & Google Sheets
   const performAutoSync = useCallback(async () => {
-    if (!googleStatus.isConnected) return;
-    const token = await getAccessToken();
-    if (!token) return;
-
     try {
       setAutoSyncStatus('syncing');
-      const res = await syncAllToGoogleDatabase({
-        transactions: simrsTransactions,
+      const fullData: FullClinicDatabase = {
+        profile,
+        users,
+        simrs: simrsTransactions,
+        cashflow: cashFlowEntries,
         expenses,
         debts,
         receivables,
-        inventory: assets,
-        cashFlow: cashFlowEntries,
-        currentStatus: googleStatus,
-      });
-      setGoogleStatus(res);
+        vendors,
+        assets,
+        reconciliations,
+        salaries,
+      };
+
+      // 1. Auto-save to Cloud Firestore (Real-time Cloud Database)
+      await saveToCloudDatabase(fullData);
+
+      // 2. Also sync to Google Sheets if connected
+      if (googleStatus.isConnected) {
+        const token = await getAccessToken();
+        if (token) {
+          const res = await syncAllToGoogleDatabase({
+            transactions: simrsTransactions,
+            expenses,
+            debts,
+            receivables,
+            inventory: assets,
+            cashFlow: cashFlowEntries,
+            currentStatus: googleStatus,
+          });
+          setGoogleStatus(res);
+        }
+      }
+
       setAutoSyncStatus('saved');
       const nowStr = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
       setLastAutoSyncTime(nowStr);
       setTimeout(() => {
         setAutoSyncStatus('idle');
-      }, 3500);
+      }, 3000);
     } catch (err: any) {
-      console.warn('Auto-sync background check:', err?.message || err);
+      console.warn('Auto-sync notice:', err?.message || err);
       setAutoSyncStatus('error');
-      setTimeout(() => setAutoSyncStatus('idle'), 4000);
+      setTimeout(() => setAutoSyncStatus('idle'), 3500);
     }
   }, [
-    googleStatus,
+    profile,
+    users,
     simrsTransactions,
+    cashFlowEntries,
     expenses,
     debts,
     receivables,
+    vendors,
     assets,
-    cashFlowEntries,
+    reconciliations,
+    salaries,
+    googleStatus,
   ]);
+
+  // Initial cloud hydration & cross-device listener
+  useEffect(() => {
+    fetchFromCloudDatabase().then((cloudData) => {
+      if (cloudData && Array.isArray(cloudData.simrs) && cloudData.simrs.length > 0) {
+        if (cloudData.profile) setProfile(cloudData.profile);
+        if (cloudData.users && cloudData.users.length > 0) setUsers(cloudData.users);
+        setSimrsTransactions(cloudData.simrs);
+        if (cloudData.cashflow) setCashFlowEntries(cloudData.cashflow);
+        if (cloudData.expenses) setExpenses(cloudData.expenses);
+        if (cloudData.debts) setDebts(cloudData.debts);
+        if (cloudData.receivables) setReceivables(cloudData.receivables);
+        if (cloudData.vendors) setVendors(cloudData.vendors);
+        if (cloudData.assets) setAssets(cloudData.assets);
+        if (cloudData.reconciliations) setReconciliations(cloudData.reconciliations);
+        if (cloudData.salaries) setSalaries(cloudData.salaries);
+      } else {
+        // Seed initial data to Cloud Firestore so Vercel & other devices immediately load data
+        saveToCloudDatabase({
+          profile,
+          users,
+          simrs: simrsTransactions,
+          cashflow: cashFlowEntries,
+          expenses,
+          debts,
+          receivables,
+          vendors,
+          assets,
+          reconciliations,
+          salaries,
+        });
+      }
+    });
+
+    const unsub = subscribeToCloudDatabase((cloudData) => {
+      if (cloudData && Array.isArray(cloudData.simrs)) {
+        setSimrsTransactions(cloudData.simrs);
+        if (cloudData.expenses) setExpenses(cloudData.expenses);
+        if (cloudData.cashflow) setCashFlowEntries(cloudData.cashflow);
+        if (cloudData.debts) setDebts(cloudData.debts);
+        if (cloudData.receivables) setReceivables(cloudData.receivables);
+      }
+    });
+
+    return () => unsub();
+  }, []);
 
   // Trigger auto-sync whenever operational data changes
   useEffect(() => {
@@ -145,16 +225,15 @@ export default function App() {
       isInitialMount.current = false;
       return;
     }
-    if (!googleStatus.isConnected) return;
 
     if (autoSyncTimerRef.current) {
       clearTimeout(autoSyncTimerRef.current);
     }
 
-    // Auto-save changes within 1.5 seconds of user input
+    // Auto-save changes automatically in the background
     autoSyncTimerRef.current = setTimeout(() => {
       performAutoSync();
-    }, 1500);
+    }, 800);
 
     return () => {
       if (autoSyncTimerRef.current) {
@@ -167,8 +246,11 @@ export default function App() {
     debts,
     receivables,
     assets,
+    vendors,
     cashFlowEntries,
-    googleStatus.isConnected,
+    salaries,
+    profile,
+    users,
     performAutoSync,
   ]);
 
@@ -315,7 +397,35 @@ export default function App() {
       };
       setGoogleStatus(updatedStatus);
 
-      // Perform initial database sync immediately
+      // Check if existing database already exists in Google Drive to restore automatically (e.g. on Vercel or new device)
+      try {
+        setToastMessage('Memeriksa database spreadsheet di Google Drive...');
+        const restored = await loadAllFromGoogleDatabase(undefined, (p) => setSyncProgress(p));
+        if (restored && restored.transactions.length > 0) {
+          setSimrsTransactions(restored.transactions);
+          if (restored.expenses.length > 0) setExpenses(restored.expenses);
+          if (restored.debts.length > 0) setDebts(restored.debts);
+          if (restored.receivables.length > 0) setReceivables(restored.receivables);
+          if (restored.inventory.length > 0) setAssets(restored.inventory);
+          if (restored.cashFlow.length > 0) setCashFlowEntries(restored.cashFlow);
+          setGoogleStatus({
+            ...restored.status,
+            userEmail: user.email || undefined,
+            userName: user.displayName || undefined,
+            userAvatar: user.photoURL || undefined,
+          });
+          setToastMessage(`Data dari Google Sheets berhasil dipulihkan (${restored.transactions.length} transaksi SIMRS)!`);
+          setTimeout(() => {
+            setSyncProgress(undefined);
+            setToastMessage(null);
+          }, 4000);
+          return;
+        }
+      } catch (checkErr) {
+        console.warn('Initial remote check error:', checkErr);
+      }
+
+      // If no remote DB exists yet, perform initial sync of current data
       await handleSyncGoogleDatabase(updatedStatus);
     } catch (err: any) {
       if (err?.code !== 'auth/popup-closed-by-user' && err?.code !== 'auth/cancelled-popup-request') {
@@ -324,6 +434,46 @@ export default function App() {
         setTimeout(() => setToastMessage(null), 5000);
       }
       throw err;
+    }
+  };
+
+  const handleRestoreFromGoogleDatabase = async () => {
+    setIsSyncingGoogle(true);
+    setToastMessage('Menghubungi Google Sheets untuk memulihkan data...');
+    try {
+      const data = await loadAllFromGoogleDatabase(
+        googleStatus.spreadsheetId,
+        (progress) => setSyncProgress(progress)
+      );
+
+      if (!data) {
+        setToastMessage('Belum ditemukan file database Klinik_Finance_DB di Google Drive akun ini.');
+        setTimeout(() => setToastMessage(null), 5000);
+        return;
+      }
+
+      if (data.transactions.length > 0) setSimrsTransactions(data.transactions);
+      if (data.expenses.length > 0) setExpenses(data.expenses);
+      if (data.debts.length > 0) setDebts(data.debts);
+      if (data.receivables.length > 0) setReceivables(data.receivables);
+      if (data.inventory.length > 0) setAssets(data.inventory);
+      if (data.cashFlow.length > 0) setCashFlowEntries(data.cashFlow);
+      setGoogleStatus((prev) => ({
+        ...prev,
+        ...data.status,
+      }));
+
+      setToastMessage(`Data berhasil dipulihkan (${data.transactions.length} transaksi SIMRS)!`);
+      setTimeout(() => {
+        setSyncProgress(undefined);
+        setToastMessage(null);
+      }, 4000);
+    } catch (err: any) {
+      console.warn('Restore failed:', err);
+      setToastMessage(`Gagal memulihkan data: ${err?.message || 'Periksa koneksi Google'}`);
+      setTimeout(() => setToastMessage(null), 5000);
+    } finally {
+      setIsSyncingGoogle(false);
     }
   };
 
@@ -795,6 +945,24 @@ export default function App() {
     setTimeout(() => setToastMessage(null), 4000);
   };
 
+  // Handler: Restore Database from File
+  const handleRestoreDatabase = (restored: FullClinicDatabase) => {
+    if (restored.profile) setProfile(restored.profile);
+    if (restored.users && restored.users.length > 0) setUsers(restored.users);
+    if (restored.simrs) setSimrsTransactions(restored.simrs);
+    if (restored.cashflow) setCashFlowEntries(restored.cashflow);
+    if (restored.expenses) setExpenses(restored.expenses);
+    if (restored.debts) setDebts(restored.debts);
+    if (restored.receivables) setReceivables(restored.receivables);
+    if (restored.vendors) setVendors(restored.vendors);
+    if (restored.assets) setAssets(restored.assets);
+    if (restored.reconciliations) setReconciliations(restored.reconciliations);
+    if (restored.salaries) setSalaries(restored.salaries);
+    saveToCloudDatabase(restored);
+    setToastMessage('Database berhasil dipulihkan & disinkronkan ke cloud!');
+    setTimeout(() => setToastMessage(null), 4000);
+  };
+
   // Handler: Kosongkan seluruh data demo agar siap digunakan untuk data riil klinik (User Request 1)
   const confirmClearRealData = () => {
     clearAllDataToBlank();
@@ -864,6 +1032,7 @@ export default function App() {
         onNavigateTab={handleSelectTab}
         onSelectNotificationItem={handleSelectNotification}
         onLogout={handleLogout}
+        onOpenDatabaseModal={() => setShowDatabaseModal(true)}
       />
 
       {/* Main App Body */}
@@ -1211,6 +1380,30 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {/* Real-time Cloud Database & Backup Center Modal */}
+      <DatabaseSyncModal
+        isOpen={showDatabaseModal}
+        onClose={() => setShowDatabaseModal(false)}
+        currentData={{
+          profile,
+          users,
+          simrs: simrsTransactions,
+          cashflow: cashFlowEntries,
+          expenses,
+          debts,
+          receivables,
+          vendors,
+          assets,
+          reconciliations,
+          salaries,
+        }}
+        onRestoreData={handleRestoreDatabase}
+        syncStatus={autoSyncStatus}
+        lastSyncTime={lastAutoSyncTime}
+        onManualTriggerSync={performAutoSync}
+        clinicProfile={profile}
+      />
 
       {/* Floating Success Toast */}
       {toastMessage && (
