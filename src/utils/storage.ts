@@ -68,25 +68,24 @@ export const setStoredItem = <T>(key: string, value: T): void => {
 
 export const loadAllData = () => {
   const profile = getStoredItem<ClinicProfile>(STORAGE_KEYS.PROFILE, INITIAL_CLINIC_PROFILE);
-  const storedUsers = getStoredItem<UserAccount[] | null>(
-  STORAGE_KEYS.USERS,
-  null
-);
+  const storedUsers = getStoredItem<UserAccount[] | null>(STORAGE_KEYS.USERS, null);
 
-const users: UserAccount[] =
-  Array.isArray(storedUsers) && storedUsers.length > 0
-    ? storedUsers
-    : INITIAL_USERS;
+  const users: UserAccount[] =
+    Array.isArray(storedUsers) && storedUsers.length > 0
+      ? storedUsers
+      : INITIAL_USERS;
 
-const defaultUser =
-  users.find((u) => u.username === 'aku') ||
-  users[1] ||
-  users[0];
+  const defaultUser =
+    users.find((u) => u.username === 'admin') ||
+    users.find((u) => u.username === 'keuangan') ||
+    users.find((u) => u.username === 'direktur') ||
+    users.find((u) => u.username === 'manajer') ||
+    users[0];
 
-const activeUserId = getStoredItem<string>(
-  STORAGE_KEYS.ACTIVE_USER_ID,
-  defaultUser?.id || 'usr-1'
-);
+  const activeUserId = getStoredItem<string>(
+    STORAGE_KEYS.ACTIVE_USER_ID,
+    defaultUser?.id || 'usr-1'
+  );
   const simrs = getStoredItem<SimrsTransaction[]>(STORAGE_KEYS.SIMRS, INITIAL_SIMRS_TRANSACTIONS);
   const cashflow = getStoredItem<CashFlowEntry[]>(STORAGE_KEYS.CASHFLOW, INITIAL_CASH_FLOW);
   const expenses = getStoredItem<ExpenseEntry[]>(STORAGE_KEYS.EXPENSES, INITIAL_EXPENSES);

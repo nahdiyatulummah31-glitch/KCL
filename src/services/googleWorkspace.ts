@@ -1,62 +1,140 @@
-import { initializeApp, getApps, getApp } from 'firebase/app';
+/**
+ * Google Workspace Service
+ * 
+ * Architecture:
+ * Vercel / Client -> Google Identity Services (GIS OAuth 2.0) -> Google Sheets API & Drive API -> Google Spreadsheet
+ * 
+ * Database:
+ * Primary Database: Google Spreadsheet (Active: KLINIK FINANCE DB 001, KLINIK FINANCE DB 002, etc.)
+ * Primary Data Tab: APP_DATA (Column A = DATASET, Column B = RECORD_ID, Column C = JSON_DATA, Column D = UPDATED_AT)
+ * Auto Rotation Limit: 9,500,000 cells (archives old DB, auto-creates next volume)
+ * All devices (HP, Laptop, PC, Vercel) automatically discover and use the same active database.
+ * No Google Apps Script. No Firebase database.
+ */
+
 import {
-  getAuth,
-  signInWithPopup,
-  GoogleAuthProvider,
-  onAuthStateChanged,
-  signOut,
-  User,
-} from 'firebase/auth';
-import firebaseConfig from '../../firebase-applet-config.json';
-import {
+  ClinicProfile,
+  UserAccount,
   SimrsTransaction,
   ExpenseEntry,
   DebtEntry,
   ReceivableEntry,
   ClinicAsset,
   CashFlowEntry,
+  Vendor,
+  DailyCashReconciliation,
+  EmployeeSalaryRecord,
+  AuditLog,
   GoogleDatabaseStatus,
   GoogleDriveFile,
 } from '../types';
+import { initializeApp, getApps, getApp } from 'firebase/app';
+import {
+  getAuth,
+  signInWithPopup,
+  GoogleAuthProvider,
+  signOut,
+  onAuthStateChanged,
+} from 'firebase/auth';
+import firebaseConfig from '../../firebase-applet-config.json';
 
-// Initialize Firebase App with environment variables support for GitHub/custom deployments
-const firebaseConfigMerged = {
-  projectId: (import.meta as any).env?.VITE_FIREBASE_PROJECT_ID || firebaseConfig.projectId,
-  appId: (import.meta as any).env?.VITE_FIREBASE_APP_ID || firebaseConfig.appId,
-  apiKey: (import.meta as any).env?.VITE_FIREBASE_API_KEY || firebaseConfig.apiKey,
-  authDomain: (import.meta as any).env?.VITE_FIREBASE_AUTH_DOMAIN || firebaseConfig.authDomain,
-  storageBucket: (import.meta as any).env?.VITE_FIREBASE_STORAGE_BUCKET || firebaseConfig.storageBucket,
-  messagingSenderId: (import.meta as any).env?.VITE_FIREBASE_MESSAGING_SENDER_ID || firebaseConfig.messagingSenderId,
-  oAuthClientId: (import.meta as any).env?.VITE_FIREBASE_OAUTH_CLIENT_ID || (firebaseConfig as any).oAuthClientId,
-};
+// Initialize Firebase App for Workspace OAuth Authentication
+const firebaseApp = !getApps().length ? initializeApp(firebaseConfig) : getApp();
+export const firebaseAuth = getAuth(firebaseApp);
 
-const app = getApps().length === 0 ? initializeApp(firebaseConfigMerged) : getApp();
-export const auth = getAuth(app);
+const firebaseGoogleProvider = new GoogleAuthProvider();
+firebaseGoogleProvider.addScope('https://www.googleapis.com/auth/spreadsheets');
+firebaseGoogleProvider.addScope('https://www.googleapis.com/auth/drive');
 
-// Configure Google Auth Provider with Workspace Scopes
+// ==========================================
+// CONFIGURATION & LIMITS
+// ==========================================
+
+export const MAX_CELLS_CAPACITY = 10_000_000;
+export const AUTO_ROLLOVER_THRESHOLD = 9_500_000; // 9.5M safe cell threshold
+
+// Google Client ID
+const DEFAULT_CLIENT_ID = '254409170668-a2d0kjd0822b3ffm1n9dr88jnoklo2m6.apps.googleusercontent.com';
+export const CUSTOM_CLIENT_ID_KEY = 'klinik_custom_google_client_id_v3';
+
+export function getEffectiveGoogleClientId(): string {
+  try {
+    const custom = localStorage.getItem(CUSTOM_CLIENT_ID_KEY);
+    if (custom && custom.trim().length > 10) return custom.trim();
+  } catch {}
+  return (import.meta as any).env?.VITE_GOOGLE_CLIENT_ID || DEFAULT_CLIENT_ID;
+}
+
+export function setCustomGoogleClientId(clientId: string): void {
+  try {
+    if (clientId && clientId.trim()) {
+      localStorage.setItem(CUSTOM_CLIENT_ID_KEY, clientId.trim());
+    } else {
+      localStorage.removeItem(CUSTOM_CLIENT_ID_KEY);
+    }
+    tokenClientInstance = null;
+  } catch {}
+}
+
+export function setManualGoogleAccessToken(token: string, expiresInMs: number = 3600000): void {
+  cachedAccessToken = token;
+  try {
+    localStorage.setItem(GOOGLE_TOKEN_KEY, token);
+    localStorage.setItem(GOOGLE_TOKEN_EXPIRY_KEY, (Date.now() + expiresInMs).toString());
+  } catch {}
+}
+
+export function setCustomSpreadsheetId(sheetId: string): void {
+  try {
+    if (sheetId && sheetId.trim()) {
+      localStorage.setItem(ACTIVE_DB_SPREADSHEET_ID_KEY, sheetId.trim());
+    } else {
+      localStorage.removeItem(ACTIVE_DB_SPREADSHEET_ID_KEY);
+    }
+  } catch {}
+}
+
+export const GOOGLE_CLIENT_ID = getEffectiveGoogleClientId();
+
+// Scopes required for Google Sheets Database and Google Drive Receipts
 export const WORKSPACE_SCOPES = [
   'https://www.googleapis.com/auth/spreadsheets',
-  'https://www.googleapis.com/auth/drive.file',
+  'https://www.googleapis.com/auth/drive',
+  'https://www.googleapis.com/auth/userinfo.profile',
+  'https://www.googleapis.com/auth/userinfo.email',
 ];
 
-const provider = new GoogleAuthProvider();
-WORKSPACE_SCOPES.forEach((scope) => provider.addScope(scope));
-provider.setCustomParameters({ prompt: 'select_account' });
-
-// In-Memory & Storage Token Cache
+// Token Storage Keys
 export const GOOGLE_TOKEN_KEY = 'klinik_google_access_token_v3';
 export const GOOGLE_TOKEN_EXPIRY_KEY = 'klinik_google_token_expiry_v3';
+export const GOOGLE_USER_INFO_KEY = 'klinik_google_user_info_v3';
+export const ACTIVE_DB_SPREADSHEET_ID_KEY = 'klinik_active_db_spreadsheet_id_v3';
 
+// In-Memory Token Cache
 let cachedAccessToken: string | null = null;
-let isSigningIn = false;
+let cachedUserInfo: { email?: string; name?: string; picture?: string } | null = null;
+let tokenClientInstance: any = null;
 
-// Check synchronously if a valid unexpired token exists in memory or localStorage
+// ==========================================
+// GOOGLE IDENTITY SERVICES (GIS) AUTHENTICATION
+// ==========================================
+
+declare global {
+  interface Window {
+    google?: any;
+  }
+}
+
+/**
+ * Check synchronously if a valid unexpired access token exists
+ */
 export const hasSavedGoogleToken = (): boolean => {
   if (cachedAccessToken) return true;
   try {
     const savedToken = localStorage.getItem(GOOGLE_TOKEN_KEY);
     const expiry = localStorage.getItem(GOOGLE_TOKEN_EXPIRY_KEY);
     if (savedToken && expiry && Date.now() < parseInt(expiry, 10)) {
+      cachedAccessToken = savedToken;
       return true;
     }
   } catch {
@@ -65,81 +143,9 @@ export const hasSavedGoogleToken = (): boolean => {
   return false;
 };
 
-// Max Cell Limits as specified by user
-export const MAX_CELLS_CAPACITY = 10_000_000;
-export const AUTO_ROLLOVER_THRESHOLD = 9_000_000;
-
-export const initAuth = (
-  onAuthSuccess?: (user: User, token: string) => void,
-  onAuthFailure?: () => void
-) => {
-  return onAuthStateChanged(auth, async (user: User | null) => {
-    if (user) {
-      const token = await getAccessToken();
-      if (token) {
-        if (onAuthSuccess) onAuthSuccess(user, token);
-      } else if (!isSigningIn) {
-        if (onAuthFailure) onAuthFailure();
-      }
-    } else {
-      cachedAccessToken = null;
-      try {
-        localStorage.removeItem(GOOGLE_TOKEN_KEY);
-        localStorage.removeItem(GOOGLE_TOKEN_EXPIRY_KEY);
-      } catch {
-        // ignore
-      }
-      if (onAuthFailure) onAuthFailure();
-    }
-  });
-};
-
-export const initWorkspaceAuth = initAuth;
-
-export const googleSignIn = async (): Promise<{ user: User; accessToken: string }> => {
-  try {
-    isSigningIn = true;
-    const result = await signInWithPopup(auth, provider);
-    const credential = GoogleAuthProvider.credentialFromResult(result);
-    let accessToken = credential?.accessToken;
-    if (!accessToken) {
-      accessToken = await result.user.getIdToken();
-    }
-    if (!accessToken) {
-      throw new Error('Gagal mendapatkan token otentikasi Google.');
-    }
-    cachedAccessToken = accessToken;
-    try {
-      localStorage.setItem(GOOGLE_TOKEN_KEY, cachedAccessToken);
-      // Valid for ~1 hour (3500 seconds)
-      localStorage.setItem(GOOGLE_TOKEN_EXPIRY_KEY, (Date.now() + 3500 * 1000).toString());
-    } catch (e) {
-      console.warn('Could not store Google OAuth token:', e);
-    }
-    return { user: result.user, accessToken: cachedAccessToken };
-  } catch (err: any) {
-    const currentHost = typeof window !== 'undefined' ? window.location.hostname : 'domain Anda';
-    if (err?.code === 'auth/unauthorized-domain') {
-      err.friendlyMessage = `Domain "${currentHost}" belum didaftarkan di Firebase Console. Untuk mengaktifkan: Tambahkan "${currentHost}" ke Firebase Console > Authentication > Settings > Authorized domains.`;
-      err.unauthorizedDomain = currentHost;
-    } else if (err?.code === 'auth/popup-blocked') {
-      err.friendlyMessage = 'Popup Google Sign-in diblokir oleh browser. Izinkan pop-up untuk situs ini lalu coba lagi.';
-    } else if (err?.code === 'auth/popup-closed-by-user' || err?.code === 'auth/cancelled-popup-request') {
-      err.friendlyMessage = 'Proses login Google dibatalkan.';
-    } else if (err?.code === 'auth/network-request-failed') {
-      err.friendlyMessage = 'Gagal menghubungi server Google. Periksa koneksi internet Anda.';
-    } else if (err?.code === 'auth/operation-not-allowed') {
-      err.friendlyMessage = 'Metode Google Sign-In belum diaktifkan di Firebase Console Authentication.';
-    }
-    if (err?.code !== 'auth/popup-closed-by-user' && err?.code !== 'auth/cancelled-popup-request') {
-      console.warn('Google Sign-in error details:', err);
-    }
-    throw err;
-  } finally {
-    isSigningIn = false;
-  }
-};
-
+/**
+ * Retrieve current valid access token
+ */
 export const getAccessToken = async (): Promise<string | null> => {
   if (cachedAccessToken) {
     try {
@@ -147,7 +153,6 @@ export const getAccessToken = async (): Promise<string | null> => {
       if (!expiry || Date.now() < parseInt(expiry, 10)) {
         return cachedAccessToken;
       }
-      // Token is expired
       cachedAccessToken = null;
     } catch {
       return cachedAccessToken;
@@ -167,23 +172,289 @@ export const getAccessToken = async (): Promise<string | null> => {
   return null;
 };
 
+/**
+ * Fetch Google User Profile (name, email, picture) using access token
+ */
+export async function fetchGoogleUserProfile(token: string): Promise<{
+  email: string;
+  name: string;
+  picture?: string;
+}> {
+  try {
+    const res = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (res.ok) {
+      const info = await res.json();
+      const profile = {
+        email: info.email || '',
+        name: info.name || info.email || 'Pengguna Google',
+        picture: info.picture || '',
+      };
+      cachedUserInfo = profile;
+      try {
+        localStorage.setItem(GOOGLE_USER_INFO_KEY, JSON.stringify(profile));
+      } catch {
+        // ignore
+      }
+      return profile;
+    }
+  } catch (err) {
+    console.warn('Could not fetch Google user info:', err);
+  }
+
+  return { email: '', name: 'Pengguna Google' };
+}
+
+/**
+ * Get cached user info if available
+ */
+export function getSavedGoogleUserInfo(): { email?: string; name?: string; picture?: string } | null {
+  if (cachedUserInfo) return cachedUserInfo;
+  try {
+    const str = localStorage.getItem(GOOGLE_USER_INFO_KEY);
+    if (str) {
+      cachedUserInfo = JSON.parse(str);
+      return cachedUserInfo;
+    }
+  } catch {
+    // ignore
+  }
+  return null;
+}
+
+/**
+ * Initialize Google Identity Services OAuth 2.0 Token Client
+ */
+export function initGoogleTokenClient(): Promise<any> {
+  return new Promise((resolve, reject) => {
+    const effectiveClientId = getEffectiveGoogleClientId();
+    if (tokenClientInstance && (tokenClientInstance as any)._clientId === effectiveClientId) {
+      resolve(tokenClientInstance);
+      return;
+    }
+
+    let attempts = 0;
+    const maxAttempts = 50; // 5 seconds max
+
+    const checkGsi = () => {
+      if (window.google?.accounts?.oauth2) {
+        try {
+          const clientId = getEffectiveGoogleClientId();
+          tokenClientInstance = window.google.accounts.oauth2.initTokenClient({
+            client_id: clientId,
+            scope: WORKSPACE_SCOPES.join(' '),
+            callback: () => {}, // overridden per request
+          });
+          (tokenClientInstance as any)._clientId = clientId;
+          resolve(tokenClientInstance);
+        } catch (e: any) {
+          reject(new Error(`Gagal inisialisasi Google Auth Client: ${e?.message || e}`));
+        }
+      } else {
+        attempts++;
+        if (attempts >= maxAttempts) {
+          reject(
+            new Error(
+              'Google Identity Services (GSI) belum termuat. Periksa koneksi internet Anda atau pastikan script Google tidak diblokir.'
+            )
+          );
+        } else {
+          setTimeout(checkGsi, 100);
+        }
+      }
+    };
+
+    checkGsi();
+  });
+}
+
+/**
+ * Authenticate with Google using Google Identity Services (GIS)
+ */
+export const googleSignInGIS = async (): Promise<{
+  user: { email: string; displayName: string; photoURL?: string };
+  accessToken: string;
+}> => {
+  const client = await initGoogleTokenClient();
+
+  return new Promise((resolve, reject) => {
+    let resolved = false;
+
+    client.callback = async (response: any) => {
+      resolved = true;
+      if (response.error) {
+        console.error('GIS Error:', response);
+        const errDesc = response.error_description || response.error;
+        const err: any = new Error(errDesc);
+        if (response.error === 'access_denied') {
+          err.friendlyMessage = 'Izin akses Google ditolak oleh pengguna.';
+        } else if (response.error === 'popup_closed_by_user') {
+          err.friendlyMessage = 'Jendela login Google ditutup sebelum selesai.';
+        } else if (response.error === 'origin_mismatch' || String(errDesc).includes('origin')) {
+          err.friendlyMessage =
+            'Domain aplikasi belum terdaftar di Authorized JavaScript Origins pada Google Cloud Console. Masukkan Google Client ID Anda sendiri di pengaturan.';
+        }
+        reject(err);
+        return;
+      }
+
+      const token = response.access_token;
+      if (!token) {
+        reject(new Error('Gagal mendapatkan token akses dari Google.'));
+        return;
+      }
+
+      cachedAccessToken = token;
+      const expiresInSec = response.expires_in ? parseInt(response.expires_in, 10) : 3500;
+      const expiryTimestamp = Date.now() + expiresInSec * 1000;
+
+      try {
+        localStorage.setItem(GOOGLE_TOKEN_KEY, token);
+        localStorage.setItem(GOOGLE_TOKEN_EXPIRY_KEY, expiryTimestamp.toString());
+      } catch (e) {
+        console.warn('Could not cache token to localStorage:', e);
+      }
+
+      const userInfo = await fetchGoogleUserProfile(token);
+
+      resolve({
+        user: {
+          email: userInfo.email,
+          displayName: userInfo.name,
+          photoURL: userInfo.picture,
+        },
+        accessToken: token,
+      });
+    };
+
+    try {
+      client.requestAccessToken({ prompt: '' });
+    } catch (e) {
+      if (!resolved) reject(e);
+    }
+  });
+};
+
+/**
+ * Main Google Sign-In:
+ * Uses Firebase Auth popup (provisioned with Google Workspace scopes)
+ * with automatic fallback to Google Identity Services (GIS).
+ */
+export const googleSignIn = async (): Promise<{
+  user: { email: string; displayName: string; photoURL?: string };
+  accessToken: string;
+}> => {
+  // 1. Try Firebase Auth popup with provisioned Google Workspace scopes
+  try {
+    const result = await signInWithPopup(firebaseAuth, firebaseGoogleProvider);
+    const credential = GoogleAuthProvider.credentialFromResult(result);
+    if (credential?.accessToken) {
+      const token = credential.accessToken;
+      cachedAccessToken = token;
+      const expiryTimestamp = Date.now() + 3500 * 1000;
+      try {
+        localStorage.setItem(GOOGLE_TOKEN_KEY, token);
+        localStorage.setItem(GOOGLE_TOKEN_EXPIRY_KEY, expiryTimestamp.toString());
+      } catch {}
+
+      const userObj = {
+        email: result.user.email || '',
+        displayName: result.user.displayName || result.user.email || 'Pengguna Google',
+        photoURL: result.user.photoURL || undefined,
+      };
+      cachedUserInfo = { email: userObj.email, name: userObj.displayName, picture: userObj.photoURL };
+      try {
+        localStorage.setItem(GOOGLE_USER_INFO_KEY, JSON.stringify(cachedUserInfo));
+      } catch {}
+
+      return {
+        user: userObj,
+        accessToken: token,
+      };
+    }
+  } catch (firebaseErr: any) {
+    console.warn('Firebase Auth popup notice, checking GIS fallback:', firebaseErr);
+    if (
+      firebaseErr?.code === 'auth/popup-closed-by-user' ||
+      firebaseErr?.code === 'auth/cancelled-popup-request'
+    ) {
+      const err: any = new Error('Jendela login Google ditutup sebelum selesai.');
+      err.friendlyMessage = 'Jendela login Google ditutup sebelum selesai.';
+      throw err;
+    }
+  }
+
+  // 2. Fallback to Google Identity Services (GIS)
+  return await googleSignInGIS();
+};
+
+/**
+ * Initialize workspace auth listener / restore saved session
+ */
+export const initWorkspaceAuth = (
+  onAuthSuccess?: (user: { email?: string; displayName?: string; photoURL?: string }) => void,
+  onAuthFailure?: () => void
+) => {
+  if (hasSavedGoogleToken()) {
+    const savedUser = getSavedGoogleUserInfo();
+    if (onAuthSuccess) {
+      onAuthSuccess({
+        email: savedUser?.email,
+        displayName: savedUser?.name,
+        photoURL: savedUser?.picture,
+      });
+    }
+  }
+
+  const unsubscribe = onAuthStateChanged(firebaseAuth, (user) => {
+    if (user && hasSavedGoogleToken()) {
+      onAuthSuccess?.({
+        email: user.email || undefined,
+        displayName: user.displayName || undefined,
+        photoURL: user.photoURL || undefined,
+      });
+    } else if (!hasSavedGoogleToken()) {
+      onAuthFailure?.();
+    }
+  });
+
+  return unsubscribe;
+};
+
+export const initAuth = initWorkspaceAuth;
+
+/**
+ * Logout Google and clear stored session
+ */
 export const logoutGoogle = async () => {
   try {
-    await signOut(auth);
-  } catch (e) {
-    console.warn('Error during Google sign-out:', e);
+    await signOut(firebaseAuth);
+  } catch {}
+
+  const token = cachedAccessToken;
+  if (token && window.google?.accounts?.oauth2) {
+    try {
+      window.google.accounts.oauth2.revoke(token, () => {});
+    } catch {
+      // ignore
+    }
   }
+
   cachedAccessToken = null;
+  cachedUserInfo = null;
   try {
     localStorage.removeItem(GOOGLE_TOKEN_KEY);
     localStorage.removeItem(GOOGLE_TOKEN_EXPIRY_KEY);
+    localStorage.removeItem(GOOGLE_USER_INFO_KEY);
+    localStorage.removeItem(ACTIVE_DB_SPREADSHEET_ID_KEY);
   } catch {
     // ignore
   }
 };
 
 // ==========================================
-// GOOGLE DRIVE API UTILITIES
+// GOOGLE DRIVE API UTILITIES & FOLDER CREATION
 // ==========================================
 
 export async function ensureDriveFolder(
@@ -307,9 +578,61 @@ export async function uploadFileToDrive(
 }
 
 // ==========================================
-// GOOGLE SHEETS DATABASE API & 10M CELL ROLLOVER
+// ACTIVE DATABASE DISCOVERY & AUTO ROTATION
 // ==========================================
 
+export async function getSpreadsheetTotalCells(spreadsheetId: string): Promise<number> {
+  const token = await getAccessToken();
+  if (!token) return 0;
+
+  try {
+    const res = await fetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}?fields=sheets(properties(gridProperties(rowCount,columnCount)))`,
+      {
+        headers: { Authorization: `Bearer ${token}` },
+      }
+    );
+
+    if (!res.ok) return 0;
+    const data = await res.json();
+
+    let total = 0;
+    data.sheets?.forEach((s: any) => {
+      const rows = s.properties?.gridProperties?.rowCount || 0;
+      const cols = s.properties?.gridProperties?.columnCount || 0;
+      total += rows * cols;
+    });
+    return total;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * Format spreadsheet name by volume number:
+ * 1 -> KLINIK FINANCE DB 001
+ * 2 -> KLINIK FINANCE DB 002
+ */
+export function formatDatabaseName(volume: number): string {
+  return `KLINIK FINANCE DB ${String(volume).padStart(3, '0')}`;
+}
+
+/**
+ * Parse volume number from spreadsheet name:
+ * 'KLINIK FINANCE DB 001' -> 1
+ * 'KLINIK FINANCE DB 002' -> 2
+ */
+export function parseVolumeNumber(name: string): number {
+  const match = name.match(/KLINIK\s+FINANCE\s+DB\s+(\d+)/i);
+  if (match && match[1]) {
+    return parseInt(match[1], 10);
+  }
+  return 1;
+}
+
+/**
+ * Create a new database spreadsheet with APP_DATA tab and human-readable tabs
+ */
 export async function createDatabaseSpreadsheet(
   volumeNumber: number,
   folderId?: string
@@ -317,7 +640,7 @@ export async function createDatabaseSpreadsheet(
   const token = await getAccessToken();
   if (!token) throw new Error('Akses Google belum terhubung.');
 
-  const title = `Klinik_Finance_DB_Vol${volumeNumber}`;
+  const title = formatDatabaseName(volumeNumber);
 
   const createBody = {
     properties: {
@@ -325,6 +648,13 @@ export async function createDatabaseSpreadsheet(
       timeZone: 'Asia/Jakarta',
     },
     sheets: [
+      {
+        // TAB UTAMA APLIKASI: APP_DATA (Column A = DATASET, B = RECORD_ID, C = JSON_DATA, D = UPDATED_AT)
+        properties: {
+          title: 'APP_DATA',
+          gridProperties: { rowCount: 1500, columnCount: 5, frozenRowCount: 1 },
+        },
+      },
       {
         properties: {
           title: 'SIMRS_Transactions',
@@ -334,7 +664,7 @@ export async function createDatabaseSpreadsheet(
       {
         properties: {
           title: 'Beban_Operasional',
-          gridProperties: { rowCount: 500, columnCount: 11, frozenRowCount: 1 },
+          gridProperties: { rowCount: 500, columnCount: 12, frozenRowCount: 1 },
         },
       },
       {
@@ -346,7 +676,7 @@ export async function createDatabaseSpreadsheet(
       {
         properties: {
           title: 'Piutang_Klaim_BPJS',
-          gridProperties: { rowCount: 500, columnCount: 10, frozenRowCount: 1 },
+          gridProperties: { rowCount: 500, columnCount: 12, frozenRowCount: 1 },
         },
       },
       {
@@ -387,9 +717,9 @@ export async function createDatabaseSpreadsheet(
         errMsg = parsed.error.message;
       }
     } catch {
-      // keep text
+      // keep
     }
-    throw new Error(`Gagal membuat spreadsheet Google Sheets: ${errMsg}`);
+    throw new Error(`Gagal membuat database Google Spreadsheet: ${errMsg}`);
   }
 
   const sheetData = await res.json();
@@ -397,7 +727,7 @@ export async function createDatabaseSpreadsheet(
   const spreadsheetUrl =
     sheetData.spreadsheetUrl || `https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit`;
 
-  // Move spreadsheet into target Drive folder
+  // Move into target Google Drive folder if provided
   if (folderId) {
     try {
       await fetch(
@@ -412,7 +742,36 @@ export async function createDatabaseSpreadsheet(
     }
   }
 
-  // Calculate initial cells
+  // Set Header for APP_DATA tab immediately
+  const initHeaderData = [
+    {
+      range: 'APP_DATA!A1:D1',
+      values: [['DATASET', 'RECORD_ID', 'JSON_DATA', 'UPDATED_AT']],
+    },
+    {
+      range: 'System_Metadata!A1:B4',
+      values: [
+        ['Parameter Sistem', 'Nilai Konfigurasi'],
+        ['Database Title', title],
+        ['Volume Database', `Vol ${volumeNumber}`],
+        ['Dibuat Pada', new Date().toISOString()],
+      ],
+    },
+  ];
+
+  await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values:batchUpdate`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      valueInputOption: 'USER_ENTERED',
+      data: initHeaderData,
+    }),
+  });
+
+  // Calculate total initial cells
   let initialCells = 0;
   sheetData.sheets?.forEach((s: any) => {
     const rows = s.properties?.gridProperties?.rowCount || 0;
@@ -428,32 +787,156 @@ export async function createDatabaseSpreadsheet(
   };
 }
 
-export async function getSpreadsheetTotalCells(spreadsheetId: string): Promise<number> {
+/**
+ * Find the Active Database Spreadsheet from Google Drive.
+ * 
+ * All devices (HP, Laptop, PC, Vercel) search Google Drive for "KLINIK FINANCE DB" spreadsheets.
+ * The file with the highest volume number (e.g. KLINIK FINANCE DB 001, KLINIK FINANCE DB 002)
+ * is automatically identified as the ACTIVE DATABASE.
+ * 
+ * If none exists, it automatically creates "KLINIK FINANCE DB 001".
+ */
+export async function findOrCreateActiveDatabase(
+  onProgress?: (progress: { message: string; percent: number }) => void
+): Promise<{
+  id: string;
+  url: string;
+  name: string;
+  volumeNumber: number;
+  totalCells: number;
+  folderId: string;
+  folderUrl?: string;
+  uploadsFolderId: string;
+}> {
   const token = await getAccessToken();
-  if (!token) return 0;
+  if (!token) throw new Error('Akses Google belum terhubung. Silakan login Google.');
+
+  onProgress?.({ message: 'Memeriksa folder Google Drive...', percent: 15 });
+
+  // 1. Ensure Root Folder exists (resilient fallback to root if folder creation is restricted)
+  let mainFolder: { id: string; webViewLink?: string } = { id: '', webViewLink: '' };
+  let uploadsFolder: { id: string } = { id: '' };
+  try {
+    mainFolder = await ensureDriveFolder('[Klinik Finance] Database & Arsip Medis');
+    uploadsFolder = await ensureDriveFolder('Bukti_Nota_Kwitansi_PDF', mainFolder.id);
+  } catch (driveErr) {
+    console.warn('Drive folder notice (proceeding with root Google Drive):', driveErr);
+  }
+
+  onProgress?.({ message: 'Mencari database aktif di Google Drive...', percent: 30 });
+
+  // 2. Query Google Drive for all spreadsheets containing 'KLINIK FINANCE DB'
+  const q = `name contains 'KLINIK FINANCE DB' and mimeType='application/vnd.google-apps.spreadsheet' and trashed=false`;
+  let existingDatabases: Array<{ id: string; name: string; webViewLink?: string; volume: number }> = [];
 
   try {
-    const res = await fetch(
-      `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}?fields=sheets(properties(gridProperties(rowCount,columnCount)))`,
+    const searchRes = await fetch(
+      `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(
+        q
+      )}&orderBy=name desc,modifiedTime desc&fields=files(id,name,webViewLink,createdTime,modifiedTime)`,
       {
         headers: { Authorization: `Bearer ${token}` },
       }
     );
 
-    if (!res.ok) return 0;
-    const data = await res.json();
-
-    let total = 0;
-    data.sheets?.forEach((s: any) => {
-      const rows = s.properties?.gridProperties?.rowCount || 0;
-      const cols = s.properties?.gridProperties?.columnCount || 0;
-      total += rows * cols;
-    });
-    return total;
-  } catch {
-    return 0;
+    if (searchRes.ok) {
+      const searchData = await searchRes.json();
+      if (searchData.files && searchData.files.length > 0) {
+        existingDatabases = searchData.files
+          .filter((f: any) => /KLINIK\s+FINANCE\s+DB/i.test(f.name))
+          .map((f: any) => ({
+            id: f.id,
+            name: f.name,
+            webViewLink: f.webViewLink,
+            volume: parseVolumeNumber(f.name),
+          }))
+          .sort((a: any, b: any) => b.volume - a.volume); // Highest volume number first
+      }
+    }
+  } catch (searchErr) {
+    console.warn('Could not query Google Drive for DB files:', searchErr);
   }
+
+  // 3. If database exists, verify its capacity and rotation limit (9,500,000 cells)
+  if (existingDatabases.length > 0) {
+    const latestDb = existingDatabases[0];
+    const totalCells = await getSpreadsheetTotalCells(latestDb.id);
+
+    // If approaching 9.5M cells, auto-rotate to next volume!
+    if (totalCells >= AUTO_ROLLOVER_THRESHOLD) {
+      const nextVolume = latestDb.volume + 1;
+      onProgress?.({
+        message: `Database Vol ${latestDb.volume} hampir penuh (${totalCells.toLocaleString()} sel). Otomatis membuat ${formatDatabaseName(nextVolume)}...`,
+        percent: 50,
+      });
+
+      const newDb = await createDatabaseSpreadsheet(nextVolume, mainFolder.id || undefined);
+      localStorage.setItem(ACTIVE_DB_SPREADSHEET_ID_KEY, newDb.id);
+
+      return {
+        id: newDb.id,
+        url: newDb.url,
+        name: newDb.name,
+        volumeNumber: nextVolume,
+        totalCells: newDb.totalCells,
+        folderId: mainFolder.id,
+        folderUrl: mainFolder.webViewLink,
+        uploadsFolderId: uploadsFolder.id,
+      };
+    }
+
+    // Active Database is valid and within safe limit
+    localStorage.setItem(ACTIVE_DB_SPREADSHEET_ID_KEY, latestDb.id);
+    return {
+      id: latestDb.id,
+      url: latestDb.webViewLink || `https://docs.google.com/spreadsheets/d/${latestDb.id}/edit`,
+      name: latestDb.name,
+      volumeNumber: latestDb.volume,
+      totalCells,
+      folderId: mainFolder.id,
+      folderUrl: mainFolder.webViewLink,
+      uploadsFolderId: uploadsFolder.id,
+    };
+  }
+
+  // Check if we already have a cached active spreadsheet ID before creating new
+  const cachedSheetId = localStorage.getItem(ACTIVE_DB_SPREADSHEET_ID_KEY);
+  if (cachedSheetId) {
+    const totalCells = await getSpreadsheetTotalCells(cachedSheetId);
+    if (totalCells > 0) {
+      return {
+        id: cachedSheetId,
+        url: `https://docs.google.com/spreadsheets/d/${cachedSheetId}/edit`,
+        name: 'KLINIK FINANCE DB 001',
+        volumeNumber: 1,
+        totalCells,
+        folderId: mainFolder.id,
+        folderUrl: mainFolder.webViewLink,
+        uploadsFolderId: uploadsFolder.id,
+      };
+    }
+  }
+
+  // 4. No existing database found -> Auto-create "KLINIK FINANCE DB 001"
+  onProgress?.({ message: 'Membuat database utama: KLINIK FINANCE DB 001...', percent: 50 });
+  const created = await createDatabaseSpreadsheet(1, mainFolder.id || undefined);
+  localStorage.setItem(ACTIVE_DB_SPREADSHEET_ID_KEY, created.id);
+
+  return {
+    id: created.id,
+    url: created.url,
+    name: created.name,
+    volumeNumber: 1,
+    totalCells: created.totalCells,
+    folderId: mainFolder.id,
+    folderUrl: mainFolder.webViewLink,
+    uploadsFolderId: uploadsFolder.id,
+  };
 }
+
+// ==========================================
+// AUTO LOAD & SYNC IMPLEMENTATION (APP_DATA TAB)
+// ==========================================
 
 export interface SyncPayload {
   transactions: SimrsTransaction[];
@@ -462,72 +945,306 @@ export interface SyncPayload {
   receivables: ReceivableEntry[];
   inventory: ClinicAsset[];
   cashFlow: CashFlowEntry[];
+  vendors: Vendor[];
+  salaries: EmployeeSalaryRecord[];
+  reconciliations: DailyCashReconciliation[];
+  profile: ClinicProfile;
+  users: UserAccount[];
+  logs?: AuditLog[];
   currentStatus: GoogleDatabaseStatus;
 }
 
+export interface PulledDatabaseData {
+  transactions: SimrsTransaction[];
+  expenses: ExpenseEntry[];
+  debts: DebtEntry[];
+  receivables: ReceivableEntry[];
+  inventory: ClinicAsset[];
+  cashFlow: CashFlowEntry[];
+  vendors: Vendor[];
+  salaries: EmployeeSalaryRecord[];
+  reconciliations: DailyCashReconciliation[];
+  profile?: ClinicProfile;
+  users?: UserAccount[];
+  logs?: AuditLog[];
+  status: GoogleDatabaseStatus;
+}
+
+/**
+ * AUTO LOAD:
+ * Load all clinic data from the Google Spreadsheet active database (APP_DATA tab).
+ */
+export async function loadAllFromGoogleDatabase(
+  spreadsheetIdOverride?: string,
+  onProgress?: (progress: { message: string; percent: number }) => void
+): Promise<PulledDatabaseData | null> {
+  const token = await getAccessToken();
+  if (!token) return null;
+
+  onProgress?.({ message: 'Mencari database aktif di Google Drive...', percent: 20 });
+
+  let activeDb: {
+    id: string;
+    url: string;
+    name: string;
+    volumeNumber: number;
+    totalCells: number;
+    folderId: string;
+    folderUrl?: string;
+    uploadsFolderId: string;
+  };
+
+  if (spreadsheetIdOverride) {
+    const totalCells = await getSpreadsheetTotalCells(spreadsheetIdOverride);
+    activeDb = {
+      id: spreadsheetIdOverride,
+      url: `https://docs.google.com/spreadsheets/d/${spreadsheetIdOverride}/edit`,
+      name: 'KLINIK FINANCE DB',
+      volumeNumber: 1,
+      totalCells,
+      folderId: '',
+      uploadsFolderId: '',
+    };
+  } else {
+    activeDb = await findOrCreateActiveDatabase(onProgress);
+  }
+
+  onProgress?.({ message: 'Mengambil data dari Google Spreadsheet...', percent: 50 });
+
+  // Read APP_DATA tab: Range A2:D (DATASET, RECORD_ID, JSON_DATA, UPDATED_AT)
+  const appDataUrl = `https://sheets.googleapis.com/v4/spreadsheets/${activeDb.id}/values/APP_DATA!A2:D`;
+  const res = await fetch(appDataUrl, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+
+  if (!res.ok) {
+    console.warn('Could not read APP_DATA tab, might be newly created');
+    return null;
+  }
+
+  const dataJson = await res.json();
+  const rows: any[][] = dataJson.values || [];
+
+  if (rows.length === 0) {
+    // Database is empty (new spreadsheet)
+    return null;
+  }
+
+  // Parse datasets from APP_DATA
+  const transactions: SimrsTransaction[] = [];
+  const expenses: ExpenseEntry[] = [];
+  const debts: DebtEntry[] = [];
+  const receivables: ReceivableEntry[] = [];
+  const inventory: ClinicAsset[] = [];
+  const cashFlow: CashFlowEntry[] = [];
+  const vendors: Vendor[] = [];
+  const salaries: EmployeeSalaryRecord[] = [];
+  const reconciliations: DailyCashReconciliation[] = [];
+  const logs: AuditLog[] = [];
+  let profile: ClinicProfile | undefined = undefined;
+  const users: UserAccount[] = [];
+
+  for (const row of rows) {
+    if (!row || row.length < 3) continue;
+    const dataset = String(row[0] || '').trim().toLowerCase();
+    const jsonStr = row[2];
+
+    try {
+      const parsed = JSON.parse(jsonStr);
+      if (!parsed) continue;
+
+      switch (dataset) {
+        case 'simrs':
+          transactions.push(parsed);
+          break;
+        case 'expenses':
+          expenses.push(parsed);
+          break;
+        case 'debts':
+          debts.push(parsed);
+          break;
+        case 'receivables':
+          receivables.push(parsed);
+          break;
+        case 'inventory':
+        case 'assets':
+          inventory.push(parsed);
+          break;
+        case 'cashflow':
+          cashFlow.push(parsed);
+          break;
+        case 'vendors':
+          vendors.push(parsed);
+          break;
+        case 'salaries':
+          salaries.push(parsed);
+          break;
+        case 'reconciliations':
+          reconciliations.push(parsed);
+          break;
+        case 'profile':
+          profile = parsed;
+          break;
+        case 'users':
+          users.push(parsed);
+          break;
+        case 'logs':
+          logs.push(parsed);
+          break;
+        default:
+          break;
+      }
+    } catch {
+      // ignore invalid json line
+    }
+  }
+
+  onProgress?.({ message: 'Data Google Spreadsheet berhasil dimuat!', percent: 100 });
+
+  const userInfo = getSavedGoogleUserInfo();
+
+  return {
+    transactions,
+    expenses,
+    debts,
+    receivables,
+    inventory,
+    cashFlow,
+    vendors,
+    salaries,
+    reconciliations,
+    profile,
+    users: users.length > 0 ? users : undefined,
+    logs,
+    status: {
+      isConnected: true,
+      userEmail: userInfo?.email,
+      userName: userInfo?.name,
+      userAvatar: userInfo?.picture,
+      spreadsheetId: activeDb.id,
+      spreadsheetUrl: activeDb.url,
+      spreadsheetName: activeDb.name,
+      driveFolderId: activeDb.folderId,
+      driveFolderUrl: activeDb.folderUrl,
+      driveUploadsFolderId: activeDb.uploadsFolderId,
+      volumeNumber: activeDb.volumeNumber,
+      totalCellsUsed: activeDb.totalCells,
+      maxCellsCapacity: MAX_CELLS_CAPACITY,
+      autoRolloverThreshold: AUTO_ROLLOVER_THRESHOLD,
+      lastSyncedAt: new Date().toLocaleString('id-ID'),
+      lastSyncStatus: 'success',
+    },
+  };
+}
+
+/**
+ * AUTO SYNC:
+ * Synchronize all React State changes directly into Google Spreadsheet APP_DATA tab
+ * and human-readable reporting tabs.
+ */
 export async function syncAllToGoogleDatabase(
   payload: SyncPayload,
   onProgress?: (progress: { message: string; percent: number }) => void
 ): Promise<GoogleDatabaseStatus> {
   const token = await getAccessToken();
-  if (!token) throw new Error('Google belum terhubung. Silakan login akun Google Anda.');
+  if (!token) throw new Error('Akses Google belum terhubung. Silakan login Google.');
 
-  onProgress?.({ message: 'Memeriksa folder Google Drive...', percent: 10 });
+  onProgress?.({ message: 'Memeriksa database aktif di Google Drive...', percent: 15 });
 
-  // 1. Ensure Root Folder
-  const mainFolder = await ensureDriveFolder('[Klinik Finance] Database & Arsip Medis');
-  const uploadsFolder = await ensureDriveFolder('Bukti_Nota_Kwitansi_PDF', mainFolder.id);
+  // 1. Discover or create active database (auto-rotation aware)
+  const activeDb = await findOrCreateActiveDatabase(onProgress);
 
-  onProgress?.({ message: 'Memeriksa spreadsheet database aktif...', percent: 25 });
+  onProgress?.({ message: 'Menyiapkan baris dataset APP_DATA...', percent: 40 });
 
-  let currentVolume = payload.currentStatus.volumeNumber || 1;
-  let activeSpreadsheetId = payload.currentStatus.spreadsheetId;
-  let activeSpreadsheetUrl = payload.currentStatus.spreadsheetUrl;
-  let activeSpreadsheetName = payload.currentStatus.spreadsheetName;
+  const nowIso = new Date().toISOString();
 
-  // Check if spreadsheet exists
-  if (!activeSpreadsheetId) {
-    onProgress?.({ message: `Membuat Google Spreadsheet Database Vol ${currentVolume}...`, percent: 35 });
-    const newSheet = await createDatabaseSpreadsheet(currentVolume, mainFolder.id);
-    activeSpreadsheetId = newSheet.id;
-    activeSpreadsheetUrl = newSheet.url;
-    activeSpreadsheetName = newSheet.name;
+  // 2. Prepare APP_DATA Rows (Format: DATASET | RECORD_ID | JSON_DATA | UPDATED_AT)
+  const appDataRows: string[][] = [];
+
+  // Profile
+  if (payload.profile) {
+    appDataRows.push(['profile', 'clinic_profile_master', JSON.stringify(payload.profile), nowIso]);
   }
 
-  // Check capacity & 9,000,000 cell auto-rollover rule
-  onProgress?.({ message: 'Memeriksa kuota sel spreadsheet (Batas 10 Juta Sel)...', percent: 45 });
-  let totalCells = await getSpreadsheetTotalCells(activeSpreadsheetId);
-
-  // If cell count exceeds 9,000,000, auto-generate next volume
-  if (totalCells >= AUTO_ROLLOVER_THRESHOLD) {
-    currentVolume += 1;
-    onProgress?.({
-      message: `Volume ${currentVolume - 1} hampir penuh (${totalCells.toLocaleString()} sel). Otomatis generate Vol ${currentVolume}...`,
-      percent: 50,
+  // Users
+  if (payload.users && payload.users.length > 0) {
+    payload.users.forEach((u) => {
+      appDataRows.push(['users', u.id, JSON.stringify(u), nowIso]);
     });
-    const nextSheet = await createDatabaseSpreadsheet(currentVolume, mainFolder.id);
-    activeSpreadsheetId = nextSheet.id;
-    activeSpreadsheetUrl = nextSheet.url;
-    activeSpreadsheetName = nextSheet.name;
-    totalCells = nextSheet.totalCells;
   }
 
-  onProgress?.({ message: 'Menyiapkan format data tabel & baris...', percent: 60 });
+  // SIMRS Transactions
+  payload.transactions.forEach((t) => {
+    appDataRows.push(['simrs', t.id || t.invoiceNo, JSON.stringify(t), nowIso]);
+  });
 
-  // Prepare Rows for SIMRS_Transactions
+  // Expenses
+  payload.expenses.forEach((e) => {
+    appDataRows.push(['expenses', e.id, JSON.stringify(e), nowIso]);
+  });
+
+  // Debts
+  payload.debts.forEach((d) => {
+    appDataRows.push(['debts', d.id, JSON.stringify(d), nowIso]);
+  });
+
+  // Receivables
+  payload.receivables.forEach((r) => {
+    appDataRows.push(['receivables', r.id, JSON.stringify(r), nowIso]);
+  });
+
+  // Inventory / Assets
+  payload.inventory.forEach((a) => {
+    appDataRows.push(['inventory', a.id, JSON.stringify(a), nowIso]);
+  });
+
+  // Cashflow Entries
+  payload.cashFlow.forEach((c) => {
+    appDataRows.push(['cashflow', c.id, JSON.stringify(c), nowIso]);
+  });
+
+  // Vendors
+  if (payload.vendors) {
+    payload.vendors.forEach((v) => {
+      appDataRows.push(['vendors', v.id, JSON.stringify(v), nowIso]);
+    });
+  }
+
+  // Salaries
+  if (payload.salaries) {
+    payload.salaries.forEach((s) => {
+      appDataRows.push(['salaries', s.id, JSON.stringify(s), nowIso]);
+    });
+  }
+
+  // Reconciliations
+  if (payload.reconciliations) {
+    payload.reconciliations.forEach((rec) => {
+      appDataRows.push(['reconciliations', rec.id, JSON.stringify(rec), nowIso]);
+    });
+  }
+
+  // Logs
+  if (payload.logs) {
+    payload.logs.forEach((l) => {
+      appDataRows.push(['logs', l.id, JSON.stringify(l), nowIso]);
+    });
+  }
+
+  // 3. Human-Readable Rows for Inspection
   const simrsHeader = [
-    'No Invoice / Billing',
+    'No Invoice',
     'Waktu Billing',
-    'No Rekam Medis',
+    'No RM',
     'Nama Pasien',
-    'Poliklinik / Layanan',
+    'Poliklinik',
     'Dokter',
-    'Metode Pembayaran',
+    'Metode Bayar',
     'Total Tagihan (Rp)',
     'Kasir Terima (Rp)',
     'Kembalian (Rp)',
     'Shift',
-    'Kasir Bertugas',
+    'Kasir',
     'Catatan',
   ];
   const simrsRows = payload.transactions.map((t) => [
@@ -546,19 +1263,17 @@ export async function syncAllToGoogleDatabase(
     t.notes || '-',
   ]);
 
-  // Prepare Rows for Beban_Operasional
   const expenseHeader = [
     'ID Pengeluaran',
-    'No Bukti / Kwitansi',
+    'No Bukti',
     'Tanggal',
-    'Kategori Beban',
-    'Deskripsi / Keperluan',
+    'Kategori',
+    'Keperluan',
     'Jumlah (Rp)',
-    'Sumber Dana Akun',
+    'Sumber Dana',
     'Dicatat Oleh',
-    'Nama Vendor',
-    'Status Nota',
-    'Link Bukti Google Drive',
+    'Vendor',
+    'Nota',
   ];
   const expenseRows = payload.expenses.map((e) => [
     e.id,
@@ -570,21 +1285,18 @@ export async function syncAllToGoogleDatabase(
     e.payFromAccount,
     e.createdBy,
     e.vendorName || '-',
-    e.receiptUrl ? 'Ada Nota' : 'Tanpa Nota',
     e.receiptUrl || '-',
   ]);
 
-  // Prepare Rows for Hutang_Vendor
   const debtHeader = [
-    'ID Hutang',
-    'Vendor / PBF',
+    'ID Faktur',
+    'Vendor',
     'No Faktur',
-    'Total Hutang (Rp)',
-    'Sudah Bayar (Rp)',
-    'Sisa Hutang (Rp)',
+    'Total (Rp)',
+    'Bayar (Rp)',
+    'Sisa (Rp)',
     'Jatuh Tempo',
     'Status',
-    'Tanggal Bayar Terakhir',
     'Catatan',
   ];
   const debtRows = payload.debts.map((d) => [
@@ -596,26 +1308,22 @@ export async function syncAllToGoogleDatabase(
     Math.max(0, d.totalAmount - d.paidAmount),
     d.dueDate,
     d.status,
-    d.lastPaymentDate || '-',
     d.notes || '-',
   ]);
 
-  // Prepare Rows for Piutang_Klaim_BPJS
-  const receivableHeader = [
-    'ID Piutang / Klaim',
-    'No Batch Klaim / SEP',
-    'Debitur / Penjamin',
-    'Tanggal Klaim',
+  const recHeader = [
+    'ID Klaim',
+    'No Batch / SEP',
+    'Debitur / BPJS',
+    'Tgl Klaim',
     'Jumlah Klaim (Rp)',
-    'Diterima / Cair (Rp)',
-    'Sisa Belum Cair (Rp)',
-    'Status Klaim',
-    'Perkiraan Jatuh Tempo',
-    'Status Inkaso',
-    'Kolektor Inkaso',
+    'Cair (Rp)',
+    'Sisa (Rp)',
+    'Status',
+    'Estimasi Tempo',
     'Keterangan',
   ];
-  const receivableRows = payload.receivables.map((r) => [
+  const recRows = payload.receivables.map((r) => [
     r.id,
     r.claimBatchNumber,
     r.debtorName,
@@ -625,24 +1333,20 @@ export async function syncAllToGoogleDatabase(
     Math.max(0, r.claimAmount - r.receivedAmount),
     r.status,
     r.expectedDueDate,
-    r.inkasoStatus || 'belum_ditagih',
-    r.inkasoCollector || '-',
     r.notes || '-',
   ]);
 
-  // Prepare Rows for Inventory_Obat_Alkes
-  const inventoryHeader = [
-    'Kode Aset / Inventaris',
-    'Nama Barang / Alat Medis',
+  const invHeader = [
+    'Kode Aset',
+    'Nama Barang / Alkes',
     'Kategori',
-    'Lokasi Ruangan',
+    'Ruangan',
     'Kondisi',
-    'Harga Perolehan (Rp)',
-    'Tanggal Beli',
-    'Vendor',
-    'Penanggung Jawab',
+    'Harga (Rp)',
+    'Tgl Beli',
+    'PJ',
   ];
-  const inventoryRows = payload.inventory.map((i) => [
+  const invRows = payload.inventory.map((i) => [
     i.assetCode,
     i.name,
     i.category,
@@ -650,16 +1354,14 @@ export async function syncAllToGoogleDatabase(
     i.condition,
     i.purchasePrice,
     i.purchaseDate,
-    i.vendorName || '-',
     i.personInCharge,
   ]);
 
-  // Prepare Rows for Cash_Ledger_Mutasi
   const cashHeader = [
     'ID Mutasi',
     'Tanggal',
-    'Jenis Aliran',
-    'Akun / Bank',
+    'Jenis',
+    'Akun Bank',
     'Kategori',
     'Keterangan',
     'Nominal (Rp)',
@@ -668,7 +1370,7 @@ export async function syncAllToGoogleDatabase(
   const cashRows = payload.cashFlow.map((c) => [
     c.id,
     c.date,
-    c.type === 'in' ? 'Uang Masuk (+)' : 'Uang Keluar (-)',
+    c.type === 'in' ? 'Masuk (+)' : 'Keluar (-)',
     c.account,
     c.category,
     c.description,
@@ -676,41 +1378,99 @@ export async function syncAllToGoogleDatabase(
     c.createdBy,
   ]);
 
-  // System Metadata
   const nowStr = new Date().toLocaleString('id-ID');
   const metadataRows = [
     ['Parameter Sistem', 'Nilai Konfigurasi'],
-    ['Database Title', activeSpreadsheetName || 'Klinik_Finance_DB_Vol1'],
-    ['Volume Database', `Vol ${currentVolume}`],
-    ['Kapasitas Maksimal Google Sheets', `${MAX_CELLS_CAPACITY.toLocaleString()} Sel`],
-    ['Batas Auto-Generate Volume Baru', `${AUTO_ROLLOVER_THRESHOLD.toLocaleString()} Sel`],
-    ['Total Sel Digunakan Saat Ini', `${totalCells.toLocaleString()} Sel`],
-    ['Persentase Kapasitas Digunakan', `${((totalCells / MAX_CELLS_CAPACITY) * 100).toFixed(2)}%`],
+    ['Database Title', activeDb.name],
+    ['Volume Database', `Vol ${activeDb.volumeNumber}`],
+    ['Kapasitas Batas Rotasi', `${AUTO_ROLLOVER_THRESHOLD.toLocaleString()} Sel (Aman)`],
+    ['Kapasitas Maksimal', `${MAX_CELLS_CAPACITY.toLocaleString()} Sel`],
+    ['Total Sel Digunakan', `${activeDb.totalCells.toLocaleString()} Sel`],
+    ['Total Baris Record APP_DATA', appDataRows.length.toString()],
     ['Total Transaksi SIMRS', payload.transactions.length.toString()],
-    ['Total Nota Pengeluaran', payload.expenses.length.toString()],
-    ['Total Faktur Hutang', payload.debts.length.toString()],
-    ['Total Klaim BPJS / Piutang', payload.receivables.length.toString()],
-    ['Total Aset / Inventaris', payload.inventory.length.toString()],
+    ['Total Beban Pengeluaran', payload.expenses.length.toString()],
     ['Waktu Sinkronisasi Terakhir', nowStr],
-    ['ID Folder Google Drive Utama', mainFolder.id],
-    ['ID Folder Bukti Nota Drive', uploadsFolder.id],
+    ['ID Folder Google Drive Utama', activeDb.folderId],
+    ['Status Database', 'ONLINE (ACTIVE)'],
   ];
 
-  onProgress?.({ message: 'Mengunggah seluruh data ke Google Sheets...', percent: 80 });
+  // Deduplicate appDataRows by RECORD_ID per dataset (A=DATASET, B=RECORD_ID, C=JSON_DATA)
+  const recordMap = new Map<string, string[]>();
+  for (const row of appDataRows) {
+    const key = `${row[0]}::${row[1]}`;
+    recordMap.set(key, row);
+  }
+  const uniqueAppDataRows = Array.from(recordMap.values());
 
-  // Batch update all sheets
-  const updateData = [
+  onProgress?.({ message: 'Mengirim data ke Google Spreadsheet...', percent: 75 });
+
+  // 4. Ensure all sheets exist before writing batch update
+  const requiredSheetTitles = [
+    'APP_DATA',
+    'SIMRS_Transactions',
+    'Beban_Operasional',
+    'Hutang_Vendor',
+    'Piutang_Klaim_BPJS',
+    'Inventory_Obat_Alkes',
+    'Cash_Ledger_Mutasi',
+    'System_Metadata',
+  ];
+
+  try {
+    const metaRes = await fetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${activeDb.id}?fields=sheets(properties(title))`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+    if (metaRes.ok) {
+      const metaData = await metaRes.json();
+      const existingSheetTitles = new Set(
+        metaData.sheets?.map((s: any) => s.properties?.title) || []
+      );
+      const missingTitles = requiredSheetTitles.filter((t) => !existingSheetTitles.has(t));
+      if (missingTitles.length > 0) {
+        const addRequests = missingTitles.map((title) => ({
+          addSheet: { properties: { title } },
+        }));
+        await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${activeDb.id}:batchUpdate`, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ requests: addRequests }),
+        });
+      }
+    }
+  } catch (sheetCheckErr) {
+    console.warn('Could not verify/create missing sheet tabs:', sheetCheckErr);
+  }
+
+  // Clear APP_DATA range to prevent orphaned records on deletes
+  try {
+    await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${activeDb.id}/values/APP_DATA!A2:D:clear`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+  } catch (clearErr) {
+    console.warn('Could not clear APP_DATA range before write:', clearErr);
+  }
+
+  const updateBatch = [
+    {
+      range: 'APP_DATA!A1',
+      values: [['DATASET', 'RECORD_ID', 'JSON_DATA', 'UPDATED_AT'], ...uniqueAppDataRows],
+    },
     { range: 'SIMRS_Transactions!A1', values: [simrsHeader, ...simrsRows] },
     { range: 'Beban_Operasional!A1', values: [expenseHeader, ...expenseRows] },
     { range: 'Hutang_Vendor!A1', values: [debtHeader, ...debtRows] },
-    { range: 'Piutang_Klaim_BPJS!A1', values: [receivableHeader, ...receivableRows] },
-    { range: 'Inventory_Obat_Alkes!A1', values: [inventoryHeader, ...inventoryRows] },
+    { range: 'Piutang_Klaim_BPJS!A1', values: [recHeader, ...recRows] },
+    { range: 'Inventory_Obat_Alkes!A1', values: [invHeader, ...invRows] },
     { range: 'Cash_Ledger_Mutasi!A1', values: [cashHeader, ...cashRows] },
     { range: 'System_Metadata!A1', values: metadataRows },
   ];
 
   const batchRes = await fetch(
-    `https://sheets.googleapis.com/v4/spreadsheets/${activeSpreadsheetId}/values:batchUpdate`,
+    `https://sheets.googleapis.com/v4/spreadsheets/${activeDb.id}/values:batchUpdate`,
     {
       method: 'POST',
       headers: {
@@ -719,240 +1479,39 @@ export async function syncAllToGoogleDatabase(
       },
       body: JSON.stringify({
         valueInputOption: 'USER_ENTERED',
-        data: updateData,
+        data: updateBatch,
       }),
     }
   );
 
   if (!batchRes.ok) {
-    const err = await batchRes.text();
-    throw new Error(`Gagal menulis data ke Google Sheets: ${err}`);
+    const errText = await batchRes.text();
+    throw new Error(`Gagal menulis data ke Google Spreadsheet: ${errText}`);
   }
 
-  // Recalculate cell capacity
-  const updatedTotalCells = await getSpreadsheetTotalCells(activeSpreadsheetId);
+  // 5. Recalculate total cells used
+  const updatedCells = await getSpreadsheetTotalCells(activeDb.id);
 
-  onProgress?.({ message: 'Sinkronisasi database Google Sheets & Drive selesai!', percent: 100 });
+  onProgress?.({ message: 'Tersimpan otomatis di Google Spreadsheet!', percent: 100 });
+
+  const userInfo = getSavedGoogleUserInfo();
 
   return {
     isConnected: true,
-    userEmail: payload.currentStatus.userEmail,
-    userName: payload.currentStatus.userName,
-    userAvatar: payload.currentStatus.userAvatar,
-    spreadsheetId: activeSpreadsheetId,
-    spreadsheetUrl: activeSpreadsheetUrl,
-    spreadsheetName: activeSpreadsheetName,
-    driveFolderId: mainFolder.id,
-    driveFolderUrl: mainFolder.webViewLink,
-    driveUploadsFolderId: uploadsFolder.id,
-    volumeNumber: currentVolume,
-    totalCellsUsed: updatedTotalCells || totalCells,
+    userEmail: userInfo?.email || payload.currentStatus.userEmail,
+    userName: userInfo?.name || payload.currentStatus.userName,
+    userAvatar: userInfo?.picture || payload.currentStatus.userAvatar,
+    spreadsheetId: activeDb.id,
+    spreadsheetUrl: activeDb.url,
+    spreadsheetName: activeDb.name,
+    driveFolderId: activeDb.folderId,
+    driveFolderUrl: activeDb.folderUrl,
+    driveUploadsFolderId: activeDb.uploadsFolderId,
+    volumeNumber: activeDb.volumeNumber,
+    totalCellsUsed: updatedCells || activeDb.totalCells,
     maxCellsCapacity: MAX_CELLS_CAPACITY,
     autoRolloverThreshold: AUTO_ROLLOVER_THRESHOLD,
     lastSyncedAt: nowStr,
     lastSyncStatus: 'success',
-  };
-}
-
-export interface PulledDatabaseData {
-  transactions: SimrsTransaction[];
-  expenses: ExpenseEntry[];
-  debts: DebtEntry[];
-  receivables: ReceivableEntry[];
-  inventory: ClinicAsset[];
-  cashFlow: CashFlowEntry[];
-  status: GoogleDatabaseStatus;
-}
-
-export async function loadAllFromGoogleDatabase(
-  spreadsheetIdOverride?: string,
-  onProgress?: (progress: { message: string; percent: number }) => void
-): Promise<PulledDatabaseData | null> {
-  const token = await getAccessToken();
-  if (!token) throw new Error('Akses Google belum terhubung.');
-
-  onProgress?.({ message: 'Mencari database spreadsheet di Google Drive...', percent: 20 });
-
-  let targetSpreadsheetId = spreadsheetIdOverride;
-
-  // Search Drive if ID not known
-  if (!targetSpreadsheetId) {
-    try {
-      const q = `name contains 'Klinik_Finance_DB' and mimeType='application/vnd.google-apps.spreadsheet' and trashed=false`;
-      const searchRes = await fetch(
-        `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&orderBy=createdTime desc&fields=files(id,name,webViewLink)`,
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
-      if (searchRes.ok) {
-        const searchData = await searchRes.json();
-        if (searchData.files && searchData.files.length > 0) {
-          targetSpreadsheetId = searchData.files[0].id;
-        }
-      }
-    } catch (e) {
-      console.warn('Could not search Drive for DB:', e);
-    }
-  }
-
-  if (!targetSpreadsheetId) {
-    return null;
-  }
-
-  onProgress?.({ message: 'Mengambil data dari tabel Google Sheets...', percent: 50 });
-
-  // Read all ranges using batchGet
-  const ranges = [
-    'SIMRS_Transactions!A2:M',
-    'Beban_Operasional!A2:K',
-    'Hutang_Vendor!A2:J',
-    'Piutang_Klaim_BPJS!A2:L',
-    'Inventory_Obat_Alkes!A2:I',
-    'Cash_Ledger_Mutasi!A2:H',
-  ];
-
-  const batchUrl = `https://sheets.googleapis.com/v4/spreadsheets/${targetSpreadsheetId}/values:batchGet?${ranges
-    .map((r) => `ranges=${encodeURIComponent(r)}`)
-    .join('&')}`;
-
-  const batchRes = await fetch(batchUrl, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-
-  if (!batchRes.ok) {
-    const errText = await batchRes.text();
-    throw new Error(`Gagal membaca data dari Google Sheets: ${errText}`);
-  }
-
-  const batchData = await batchRes.json();
-  const valueRanges = batchData.valueRanges || [];
-
-  // Parse SIMRS_Transactions
-  const simrsRows = valueRanges[0]?.values || [];
-  const transactions: SimrsTransaction[] = simrsRows
-    .filter((r: any[]) => r && r.length > 0 && r[0])
-    .map((r: any[], idx: number) => ({
-      id: `simrs-cloud-${idx}-${r[0] || Date.now()}`,
-      invoiceNo: r[0] || `INV-PULL-${idx}`,
-      billingTime: r[1] || new Date().toISOString(),
-      patientRm: r[2] || '-',
-      patientName: r[3] || 'Pasien',
-      department: r[4] || 'Poli Umum',
-      doctorName: r[5] || 'Dokter Jaga',
-      paymentMethod: r[6] || 'Tunai',
-      totalAmount: parseFloat(String(r[7] || 0).replace(/[^0-9.-]/g, '')) || 0,
-      cashierReceived: parseFloat(String(r[8] || r[7] || 0).replace(/[^0-9.-]/g, '')) || 0,
-      shift: (r[10] as any) || 'Pagi',
-      cashierName: r[11] || 'Kasir',
-      notes: r[12] || '',
-      isTransferredToCashflow: true,
-    }));
-
-  // Parse Beban_Operasional
-  const expenseRows = valueRanges[1]?.values || [];
-  const expenses: ExpenseEntry[] = expenseRows
-    .filter((r: any[]) => r && r.length > 0 && r[0])
-    .map((r: any[], idx: number) => ({
-      id: r[0] || `exp-cloud-${idx}`,
-      invoiceNumber: r[1] && r[1] !== '-' ? r[1] : undefined,
-      date: r[2] || new Date().toISOString().slice(0, 10),
-      category: (r[3] as any) || 'Operasional',
-      title: r[4] || 'Pengeluaran',
-      description: r[4] || 'Beban Klinik',
-      amount: parseFloat(String(r[5] || 0).replace(/[^0-9.-]/g, '')) || 0,
-      payFromAccount: r[6] || 'Kas Kasir (Tunai)',
-      createdBy: r[7] || 'Staf Keuangan',
-      vendorName: r[8] && r[8] !== '-' ? r[8] : undefined,
-      receiptUrl: r[10] && r[10] !== '-' ? r[10] : undefined,
-    }));
-
-  // Parse Hutang_Vendor
-  const debtRows = valueRanges[2]?.values || [];
-  const debts: DebtEntry[] = debtRows
-    .filter((r: any[]) => r && r.length > 0 && r[0])
-    .map((r: any[], idx: number) => ({
-      id: r[0] || `debt-cloud-${idx}`,
-      creditorName: r[1] || 'Vendor',
-      invoiceNumber: r[2] || '-',
-      totalAmount: parseFloat(String(r[3] || 0).replace(/[^0-9.-]/g, '')) || 0,
-      paidAmount: parseFloat(String(r[4] || 0).replace(/[^0-9.-]/g, '')) || 0,
-      dueDate: r[6] || new Date().toISOString().slice(0, 10),
-      status: (r[7] as any) || 'unpaid',
-      lastPaymentDate: r[8] && r[8] !== '-' ? r[8] : undefined,
-      notes: r[9] && r[9] !== '-' ? r[9] : undefined,
-    }));
-
-  // Parse Piutang_Klaim_BPJS
-  const recRows = valueRanges[3]?.values || [];
-  const receivables: ReceivableEntry[] = recRows
-    .filter((r: any[]) => r && r.length > 0 && r[0])
-    .map((r: any[], idx: number) => ({
-      id: r[0] || `rec-cloud-${idx}`,
-      claimBatchNumber: r[1] || '-',
-      debtorName: r[2] || 'BPJS Kesehatan',
-      claimDate: r[3] || new Date().toISOString().slice(0, 10),
-      claimAmount: parseFloat(String(r[4] || 0).replace(/[^0-9.-]/g, '')) || 0,
-      receivedAmount: parseFloat(String(r[5] || 0).replace(/[^0-9.-]/g, '')) || 0,
-      status: (r[7] as any) || 'submitted',
-      expectedDueDate: r[8] || new Date().toISOString().slice(0, 10),
-      inkasoStatus: (r[9] as any) || 'belum_ditagih',
-      inkasoCollector: r[10] && r[10] !== '-' ? r[10] : undefined,
-      notes: r[11] && r[11] !== '-' ? r[11] : undefined,
-    }));
-
-  // Parse Inventory_Obat_Alkes
-  const invRows = valueRanges[4]?.values || [];
-  const inventory: ClinicAsset[] = invRows
-    .filter((r: any[]) => r && r.length > 0 && r[0])
-    .map((r: any[], idx: number) => ({
-      id: `asset-cloud-${idx}`,
-      assetCode: r[0] || `AST-${idx}`,
-      name: r[1] || 'Alat Medis',
-      category: (r[2] as any) || 'Medis',
-      location: r[3] || 'Poli',
-      condition: (r[4] as any) || 'Baik',
-      purchasePrice: parseFloat(String(r[5] || 0).replace(/[^0-9.-]/g, '')) || 0,
-      purchaseDate: r[6] || new Date().toISOString().slice(0, 10),
-      vendorName: r[7] && r[7] !== '-' ? r[7] : undefined,
-      personInCharge: r[8] || 'Perawat',
-    }));
-
-  // Parse Cash_Ledger_Mutasi
-  const cashRows = valueRanges[5]?.values || [];
-  const cashFlow: CashFlowEntry[] = cashRows
-    .filter((r: any[]) => r && r.length > 0 && r[0])
-    .map((r: any[], idx: number) => ({
-      id: r[0] || `mut-cloud-${idx}`,
-      date: r[1] || new Date().toISOString().slice(0, 10),
-      type: r[2]?.includes('Keluar') ? 'out' : 'in',
-      account: r[3] || 'Kas Kasir (Tunai)',
-      category: r[4] || 'Operasional',
-      description: r[5] || 'Mutasi Kas',
-      amount: parseFloat(String(r[6] || 0).replace(/[^0-9.-]/g, '')) || 0,
-      createdBy: r[7] || 'Staf',
-    }));
-
-  onProgress?.({ message: 'Data Google Sheets berhasil dipulihkan!', percent: 100 });
-
-  const totalCells = await getSpreadsheetTotalCells(targetSpreadsheetId);
-
-  return {
-    transactions,
-    expenses,
-    debts,
-    receivables,
-    inventory,
-    cashFlow,
-    status: {
-      isConnected: true,
-      spreadsheetId: targetSpreadsheetId,
-      spreadsheetUrl: `https://docs.google.com/spreadsheets/d/${targetSpreadsheetId}/edit`,
-      spreadsheetName: 'Klinik_Finance_DB_Vol1',
-      totalCellsUsed: totalCells,
-      maxCellsCapacity: MAX_CELLS_CAPACITY,
-      autoRolloverThreshold: AUTO_ROLLOVER_THRESHOLD,
-      volumeNumber: 1,
-      lastSyncedAt: new Date().toLocaleString('id-ID'),
-      lastSyncStatus: 'success',
-    },
   };
 }

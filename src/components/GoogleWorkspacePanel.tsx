@@ -42,7 +42,7 @@ export const GoogleWorkspacePanel: React.FC<GoogleWorkspacePanelProps> = ({
     try {
       await onConnectGoogle();
     } catch (err: any) {
-      setErrorMsg(err?.message || 'Gagal menghubungkan Google Account.');
+      setErrorMsg(err?.friendlyMessage || err?.message || 'Gagal menghubungkan Google Account.');
     } finally {
       setConnecting(false);
     }
@@ -342,10 +342,10 @@ export const GoogleWorkspacePanel: React.FC<GoogleWorkspacePanelProps> = ({
               <span className="flex items-center gap-1">
                 <Sparkles className="w-3.5 h-3.5 text-teal-600" />
                 <span>
-                  Batas Google Sheets: <strong>10 Juta Sel</strong>. Sistem otomatis men-generate volume baru saat mencapai <strong>9 Juta Sel</strong>.
+                  Batas Google Sheets: <strong>10 Juta Sel</strong>. Sistem otomatis men-generate volume baru saat mencapai <strong>9,5 Juta Sel (Batas Aman)</strong>.
                 </span>
               </span>
-              <span className="text-slate-400">Ambang batas: 90%</span>
+              <span className="text-slate-400">Ambang batas: 95% (9.500.000 sel)</span>
             </div>
           </div>
         </div>

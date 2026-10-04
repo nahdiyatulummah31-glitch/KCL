@@ -63,12 +63,7 @@ import { InventoryView } from './components/InventoryView';
 import { SalaryPayrollView } from './components/SalaryPayrollView';
 import { RestrictedAccessView } from './components/RestrictedAccessView';
 import { DatabaseSyncModal } from './components/DatabaseSyncModal';
-import {
-  FullClinicDatabase,
-  fetchFromCloudDatabase,
-  saveToCloudDatabase,
-  subscribeToCloudDatabase,
-} from './services/cloudDatabase';
+import { FullClinicDatabase } from './services/cloudDatabase';
 
 export default function App() {
   const initial = loadAllData();
@@ -107,46 +102,33 @@ export default function App() {
   const [lastAutoSyncTime, setLastAutoSyncTime] = useState<string | null>(null);
   const [showDatabaseModal, setShowDatabaseModal] = useState<boolean>(false);
   const isInitialMount = useRef(true);
+  const isGoogleLoadingRef = useRef<boolean>(hasSavedGoogleToken());
   const autoSyncTimerRef = useRef<any>(null);
 
-  // Background real-time auto-sync to Cloud Firestore & Google Sheets
+  // Background real-time auto-sync to Google Spreadsheet (Primary Database)
   const performAutoSync = useCallback(async () => {
+    if (!googleStatus.isConnected || isGoogleLoadingRef.current) return;
+    const token = await getAccessToken();
+    if (!token) return;
+
     try {
       setAutoSyncStatus('syncing');
-      const fullData: FullClinicDatabase = {
-        profile,
-        users,
-        simrs: simrsTransactions,
-        cashflow: cashFlowEntries,
+      const res = await syncAllToGoogleDatabase({
+        transactions: simrsTransactions,
         expenses,
         debts,
         receivables,
+        inventory: assets,
+        cashFlow: cashFlowEntries,
         vendors,
-        assets,
-        reconciliations,
         salaries,
-      };
+        reconciliations,
+        profile,
+        users,
+        currentStatus: googleStatus,
+      });
 
-      // 1. Auto-save to Cloud Firestore (Real-time Cloud Database)
-      await saveToCloudDatabase(fullData);
-
-      // 2. Also sync to Google Sheets if connected
-      if (googleStatus.isConnected) {
-        const token = await getAccessToken();
-        if (token) {
-          const res = await syncAllToGoogleDatabase({
-            transactions: simrsTransactions,
-            expenses,
-            debts,
-            receivables,
-            inventory: assets,
-            cashFlow: cashFlowEntries,
-            currentStatus: googleStatus,
-          });
-          setGoogleStatus(res);
-        }
-      }
-
+      setGoogleStatus(res);
       setAutoSyncStatus('saved');
       const nowStr = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
       setLastAutoSyncTime(nowStr);
@@ -159,8 +141,7 @@ export default function App() {
       setTimeout(() => setAutoSyncStatus('idle'), 3500);
     }
   }, [
-    profile,
-    users,
+    googleStatus,
     simrsTransactions,
     cashFlowEntries,
     expenses,
@@ -170,70 +151,88 @@ export default function App() {
     assets,
     reconciliations,
     salaries,
-    googleStatus,
+    profile,
+    users,
   ]);
 
-  // Initial cloud hydration & cross-device listener
+  // AUTO LOAD:
+  // When app opens, if Google is connected -> load from Google Spreadsheet directly into React State!
+  // If spreadsheet has data, use it. Do not overwrite with old local data.
   useEffect(() => {
-    fetchFromCloudDatabase().then((cloudData) => {
-      if (cloudData && Array.isArray(cloudData.simrs) && cloudData.simrs.length > 0) {
-        if (cloudData.profile) setProfile(cloudData.profile);
-        if (cloudData.users && cloudData.users.length > 0) setUsers(cloudData.users);
-        setSimrsTransactions(cloudData.simrs);
-        if (cloudData.cashflow) setCashFlowEntries(cloudData.cashflow);
-        if (cloudData.expenses) setExpenses(cloudData.expenses);
-        if (cloudData.debts) setDebts(cloudData.debts);
-        if (cloudData.receivables) setReceivables(cloudData.receivables);
-        if (cloudData.vendors) setVendors(cloudData.vendors);
-        if (cloudData.assets) setAssets(cloudData.assets);
-        if (cloudData.reconciliations) setReconciliations(cloudData.reconciliations);
-        if (cloudData.salaries) setSalaries(cloudData.salaries);
-      } else {
-        // Seed initial data to Cloud Firestore so Vercel & other devices immediately load data
-        saveToCloudDatabase({
-          profile,
-          users,
-          simrs: simrsTransactions,
-          cashflow: cashFlowEntries,
-          expenses,
-          debts,
-          receivables,
-          vendors,
-          assets,
-          reconciliations,
-          salaries,
-        });
-      }
-    });
-
-    const unsub = subscribeToCloudDatabase((cloudData) => {
-      if (cloudData && Array.isArray(cloudData.simrs)) {
-        setSimrsTransactions(cloudData.simrs);
-        if (cloudData.expenses) setExpenses(cloudData.expenses);
-        if (cloudData.cashflow) setCashFlowEntries(cloudData.cashflow);
-        if (cloudData.debts) setDebts(cloudData.debts);
-        if (cloudData.receivables) setReceivables(cloudData.receivables);
-      }
-    });
-
-    return () => unsub();
+    if (hasSavedGoogleToken()) {
+      isGoogleLoadingRef.current = true;
+      setAutoSyncStatus('syncing');
+      loadAllFromGoogleDatabase().then((pulled) => {
+        if (pulled) {
+          if (pulled.transactions && pulled.transactions.length > 0) {
+            setSimrsTransactions(pulled.transactions);
+          }
+          if (pulled.expenses && pulled.expenses.length > 0) {
+            setExpenses(pulled.expenses);
+          }
+          if (pulled.debts && pulled.debts.length > 0) {
+            setDebts(pulled.debts);
+          }
+          if (pulled.receivables && pulled.receivables.length > 0) {
+            setReceivables(pulled.receivables);
+          }
+          if (pulled.inventory && pulled.inventory.length > 0) {
+            setAssets(pulled.inventory);
+          }
+          if (pulled.cashFlow && pulled.cashFlow.length > 0) {
+            setCashFlowEntries(pulled.cashFlow);
+          }
+          if (pulled.vendors && pulled.vendors.length > 0) {
+            setVendors(pulled.vendors);
+          }
+          if (pulled.salaries && pulled.salaries.length > 0) {
+            setSalaries(pulled.salaries);
+          }
+          if (pulled.reconciliations && pulled.reconciliations.length > 0) {
+            setReconciliations(pulled.reconciliations);
+          }
+          if (pulled.profile) {
+            setProfile(pulled.profile);
+          }
+          if (pulled.users && pulled.users.length > 0) {
+            setUsers(pulled.users);
+          }
+          setGoogleStatus(pulled.status);
+          setAutoSyncStatus('saved');
+          setTimeout(() => setAutoSyncStatus('idle'), 3000);
+        } else {
+          // If spreadsheet is brand new/empty, seed initial state into Google Spreadsheet!
+          performAutoSync();
+        }
+      }).catch((err) => {
+        console.warn('Initial Google Database load notice:', err);
+        setAutoSyncStatus('idle');
+      }).finally(() => {
+        setTimeout(() => {
+          isGoogleLoadingRef.current = false;
+        }, 1200);
+      });
+    } else {
+      isGoogleLoadingRef.current = false;
+    }
   }, []);
 
-  // Trigger auto-sync whenever operational data changes
+  // Auto-sync whenever any operational data changes (debounced 1.5s as requested)
   useEffect(() => {
-    if (isInitialMount.current) {
+    if (isInitialMount.current || isGoogleLoadingRef.current) {
       isInitialMount.current = false;
       return;
     }
+    if (!googleStatus.isConnected) return;
 
     if (autoSyncTimerRef.current) {
       clearTimeout(autoSyncTimerRef.current);
     }
 
-    // Auto-save changes automatically in the background
+    // Debounce 1.5 seconds so requests are not sent per character
     autoSyncTimerRef.current = setTimeout(() => {
       performAutoSync();
-    }, 800);
+    }, 1500);
 
     return () => {
       if (autoSyncTimerRef.current) {
@@ -249,8 +248,10 @@ export default function App() {
     vendors,
     cashFlowEntries,
     salaries,
+    reconciliations,
     profile,
     users,
+    googleStatus.isConnected,
     performAutoSync,
   ]);
 
@@ -515,6 +516,11 @@ export default function App() {
           receivables,
           inventory: assets,
           cashFlow: cashFlowEntries,
+          vendors,
+          salaries,
+          reconciliations,
+          profile,
+          users,
           currentStatus,
         },
         (progress) => {
@@ -958,9 +964,11 @@ export default function App() {
     if (restored.assets) setAssets(restored.assets);
     if (restored.reconciliations) setReconciliations(restored.reconciliations);
     if (restored.salaries) setSalaries(restored.salaries);
-    saveToCloudDatabase(restored);
-    setToastMessage('Database berhasil dipulihkan & disinkronkan ke cloud!');
-    setTimeout(() => setToastMessage(null), 4000);
+    setToastMessage('Database berhasil dipulihkan!');
+    setTimeout(() => {
+      setToastMessage(null);
+      performAutoSync();
+    }, 1000);
   };
 
   // Handler: Kosongkan seluruh data demo agar siap digunakan untuk data riil klinik (User Request 1)
@@ -1385,6 +1393,15 @@ export default function App() {
       <DatabaseSyncModal
         isOpen={showDatabaseModal}
         onClose={() => setShowDatabaseModal(false)}
+        googleStatus={googleStatus}
+        onConnectGoogle={handleConnectGoogle}
+        onDisconnectGoogle={handleDisconnectGoogle}
+        onSyncGoogle={() => handleSyncGoogleDatabase()}
+        onRestoreGoogle={handleRestoreFromGoogleDatabase}
+        isSyncingGoogle={isSyncingGoogle}
+        syncProgress={syncProgress}
+        autoSyncStatus={autoSyncStatus}
+        lastAutoSyncTime={lastAutoSyncTime}
         currentData={{
           profile,
           users,
@@ -1399,9 +1416,6 @@ export default function App() {
           salaries,
         }}
         onRestoreData={handleRestoreDatabase}
-        syncStatus={autoSyncStatus}
-        lastSyncTime={lastAutoSyncTime}
-        onManualTriggerSync={performAutoSync}
         clinicProfile={profile}
       />
 

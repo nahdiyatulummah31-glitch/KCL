@@ -129,10 +129,15 @@ export const Navbar: React.FC<NavbarProps> = ({
                 <CheckCircle2 className="w-3 h-3 text-emerald-600" />
                 <span>Tersimpan</span>
               </span>
-            ) : (
-              <span className="flex items-center gap-1 text-teal-900">
+            ) : googleStatus?.isConnected ? (
+              <span className="flex items-center gap-1 text-emerald-800 font-bold">
                 <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                <span>Cloud Aktif</span>
+                <span>{googleStatus.spreadsheetName ? googleStatus.spreadsheetName.replace('KLINIK FINANCE ', '') : 'DB 001'} Aktif</span>
+              </span>
+            ) : (
+              <span className="flex items-center gap-1 text-slate-600">
+                <span className="w-2 h-2 rounded-full bg-amber-400" />
+                <span>Hubungkan DB</span>
               </span>
             )}
           </button>
