@@ -25,6 +25,7 @@ import {
   setCustomGoogleClientId,
   setCustomSpreadsheetId,
   setManualGoogleAccessToken,
+  connectWithAccessToken,
   ACTIVE_DB_SPREADSHEET_ID_KEY,
   MAX_CELLS_CAPACITY,
   AUTO_ROLLOVER_THRESHOLD,
@@ -122,6 +123,25 @@ export const DatabaseSyncModal: React.FC<DatabaseSyncModalProps> = ({
     }
     setSuccessMessage('Pengaturan khusus berhasil disimpan!');
     setTimeout(() => setSuccessMessage(null), 3000);
+  };
+
+  const handleConnectWithToken = async () => {
+    if (!manualTokenInput.trim()) {
+      setErrorMessage('Masukkan Google Access Token terlebih dahulu.');
+      return;
+    }
+    setConnecting(true);
+    setErrorMessage(null);
+    try {
+      await connectWithAccessToken(manualTokenInput.trim());
+      await onConnectGoogle();
+      setSuccessMessage('Berhasil terhubung dengan Google Access Token!');
+      setTimeout(() => setSuccessMessage(null), 3500);
+    } catch (err: any) {
+      setErrorMessage(err?.message || 'Gagal menghubungkan token.');
+    } finally {
+      setConnecting(false);
+    }
   };
 
   const handleExport = () => {
@@ -513,13 +533,24 @@ export const DatabaseSyncModal: React.FC<DatabaseSyncModalProps> = ({
                   />
                 </div>
 
-                <button
-                  type="button"
-                  onClick={handleSaveAdvanced}
-                  className="px-4 py-2 bg-slate-800 hover:bg-slate-900 text-white rounded-xl font-bold cursor-pointer transition-colors shadow-2xs"
-                >
-                  Simpan Konfigurasi Khusus
-                </button>
+                <div className="flex items-center gap-2 pt-1 flex-wrap">
+                  <button
+                    type="button"
+                    onClick={handleSaveAdvanced}
+                    className="px-4 py-2 bg-slate-800 hover:bg-slate-900 text-white rounded-xl font-bold cursor-pointer transition-colors shadow-2xs"
+                  >
+                    Simpan Konfigurasi
+                  </button>
+                  {manualTokenInput.trim() && (
+                    <button
+                      type="button"
+                      onClick={handleConnectWithToken}
+                      className="px-4 py-2 bg-teal-700 hover:bg-teal-800 text-white rounded-xl font-bold cursor-pointer transition-colors shadow-2xs"
+                    >
+                      Hubungkan dengan Token
+                    </button>
+                  )}
+                </div>
               </div>
             )}
           </div>

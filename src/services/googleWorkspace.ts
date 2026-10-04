@@ -336,56 +336,98 @@ export const googleSignInGIS = async (): Promise<{
   });
 };
 
+export const isExternalOrVercel = (): boolean => {
+  if (typeof window === 'undefined') return false;
+  const host = window.location.hostname;
+  return host.endsWith('.vercel.app') || (host !== 'localhost' && host !== '127.0.0.1' && !host.includes('run.app'));
+};
+
+/**
+ * Connect directly using a Google OAuth Access Token
+ * Useful for Vercel deployments and instant device pairing
+ */
+export async function connectWithAccessToken(token: string): Promise<{
+  user: { email: string; displayName: string; photoURL?: string };
+  accessToken: string;
+}> {
+  if (!token || !token.trim()) {
+    throw new Error('Access Token Google tidak boleh kosong.');
+  }
+  const cleanToken = token.trim();
+  const userInfo = await fetchGoogleUserProfile(cleanToken);
+  if (!userInfo.email) {
+    throw new Error('Access Token tidak valid atau sudah kadaluarsa. Pastikan token memiliki scope spreadsheets & drive.');
+  }
+
+  cachedAccessToken = cleanToken;
+  const expiryTimestamp = Date.now() + 3600 * 1000;
+  try {
+    localStorage.setItem(GOOGLE_TOKEN_KEY, cleanToken);
+    localStorage.setItem(GOOGLE_TOKEN_EXPIRY_KEY, expiryTimestamp.toString());
+  } catch {}
+
+  return {
+    user: {
+      email: userInfo.email,
+      displayName: userInfo.name,
+      photoURL: userInfo.picture,
+    },
+    accessToken: cleanToken,
+  };
+}
+
 /**
  * Main Google Sign-In:
- * Uses Firebase Auth popup (provisioned with Google Workspace scopes)
- * with automatic fallback to Google Identity Services (GIS).
+ * On AI Studio preview: Uses Firebase Auth popup (provisioned with Google Workspace scopes).
+ * On Vercel / custom domains: Uses Google Identity Services (GIS) directly to prevent auth/unauthorized-domain errors.
  */
 export const googleSignIn = async (): Promise<{
   user: { email: string; displayName: string; photoURL?: string };
   accessToken: string;
 }> => {
-  // 1. Try Firebase Auth popup with provisioned Google Workspace scopes
-  try {
-    const result = await signInWithPopup(firebaseAuth, firebaseGoogleProvider);
-    const credential = GoogleAuthProvider.credentialFromResult(result);
-    if (credential?.accessToken) {
-      const token = credential.accessToken;
-      cachedAccessToken = token;
-      const expiryTimestamp = Date.now() + 3500 * 1000;
-      try {
-        localStorage.setItem(GOOGLE_TOKEN_KEY, token);
-        localStorage.setItem(GOOGLE_TOKEN_EXPIRY_KEY, expiryTimestamp.toString());
-      } catch {}
+  // If running on Vercel or custom domain, do NOT call Firebase Auth (prevents auth/unauthorized-domain)
+  if (!isExternalOrVercel()) {
+    try {
+      const result = await signInWithPopup(firebaseAuth, firebaseGoogleProvider);
+      const credential = GoogleAuthProvider.credentialFromResult(result);
+      if (credential?.accessToken) {
+        const token = credential.accessToken;
+        cachedAccessToken = token;
+        const expiryTimestamp = Date.now() + 3500 * 1000;
+        try {
+          localStorage.setItem(GOOGLE_TOKEN_KEY, token);
+          localStorage.setItem(GOOGLE_TOKEN_EXPIRY_KEY, expiryTimestamp.toString());
+        } catch {}
 
-      const userObj = {
-        email: result.user.email || '',
-        displayName: result.user.displayName || result.user.email || 'Pengguna Google',
-        photoURL: result.user.photoURL || undefined,
-      };
-      cachedUserInfo = { email: userObj.email, name: userObj.displayName, picture: userObj.photoURL };
-      try {
-        localStorage.setItem(GOOGLE_USER_INFO_KEY, JSON.stringify(cachedUserInfo));
-      } catch {}
+        const userObj = {
+          email: result.user.email || '',
+          displayName: result.user.displayName || result.user.email || 'Pengguna Google',
+          photoURL: result.user.photoURL || undefined,
+        };
+        cachedUserInfo = { email: userObj.email, name: userObj.displayName, picture: userObj.photoURL };
+        try {
+          localStorage.setItem(GOOGLE_USER_INFO_KEY, JSON.stringify(cachedUserInfo));
+        } catch {}
 
-      return {
-        user: userObj,
-        accessToken: token,
-      };
-    }
-  } catch (firebaseErr: any) {
-    console.warn('Firebase Auth popup notice, checking GIS fallback:', firebaseErr);
-    if (
-      firebaseErr?.code === 'auth/popup-closed-by-user' ||
-      firebaseErr?.code === 'auth/cancelled-popup-request'
-    ) {
-      const err: any = new Error('Jendela login Google ditutup sebelum selesai.');
-      err.friendlyMessage = 'Jendela login Google ditutup sebelum selesai.';
-      throw err;
+        return {
+          user: userObj,
+          accessToken: token,
+        };
+      }
+    } catch (firebaseErr: any) {
+      console.warn('Firebase Auth popup notice, falling back to GIS:', firebaseErr);
+      if (
+        firebaseErr?.code === 'auth/popup-closed-by-user' ||
+        firebaseErr?.code === 'auth/cancelled-popup-request'
+      ) {
+        const err: any = new Error('Jendela login Google ditutup sebelum selesai.');
+        err.friendlyMessage = 'Jendela login Google ditutup sebelum selesai.';
+        throw err;
+      }
     }
   }
 
-  // 2. Fallback to Google Identity Services (GIS)
+  // 2. Google Identity Services (GIS)
   return await googleSignInGIS();
 };
 

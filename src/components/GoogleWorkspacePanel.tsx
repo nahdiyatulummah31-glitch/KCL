@@ -11,8 +11,19 @@ import {
   Layers,
   Sparkles,
   CloudDownload,
+  Key,
+  Copy,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react';
 import { GoogleDatabaseStatus } from '../types';
+import {
+  getEffectiveGoogleClientId,
+  setCustomGoogleClientId,
+  connectWithAccessToken,
+  isExternalOrVercel,
+  CUSTOM_CLIENT_ID_KEY,
+} from '../services/googleWorkspace';
 
 interface GoogleWorkspacePanelProps {
   status: GoogleDatabaseStatus;
@@ -35,12 +46,33 @@ export const GoogleWorkspacePanel: React.FC<GoogleWorkspacePanelProps> = ({
 }) => {
   const [connecting, setConnecting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [successMsg, setSuccessMsg] = useState<string | null>(null);
+  const [copiedDomain, setCopiedDomain] = useState(false);
+
+  // Vercel / Custom Client ID & Token state
+  const isVercel = isExternalOrVercel();
+  const currentOrigin = typeof window !== 'undefined' ? window.location.origin : '';
+  const currentHost = typeof window !== 'undefined' ? window.location.host : '';
+
+  const [showVercelConfig, setShowVercelConfig] = useState(isVercel);
+  const [customClientIdInput, setCustomClientIdInput] = useState(() => {
+    try {
+      return localStorage.getItem(CUSTOM_CLIENT_ID_KEY) || '';
+    } catch {
+      return '';
+    }
+  });
+  const [manualTokenInput, setManualTokenInput] = useState('');
+  const [isConnectingToken, setIsConnectingToken] = useState(false);
 
   const handleConnect = async () => {
     setConnecting(true);
     setErrorMsg(null);
+    setSuccessMsg(null);
     try {
       await onConnectGoogle();
+      setSuccessMsg('Berhasil terhubung ke Google Spreadsheet Database!');
+      setTimeout(() => setSuccessMsg(null), 3500);
     } catch (err: any) {
       setErrorMsg(err?.friendlyMessage || err?.message || 'Gagal menghubungkan Google Account.');
     } finally {
@@ -49,7 +81,44 @@ export const GoogleWorkspacePanel: React.FC<GoogleWorkspacePanelProps> = ({
   };
 
   const handleDisconnect = async () => {
-    await onDisconnectGoogle();
+    if (window.confirm('Putuskan koneksi Google Spreadsheet? Data lokal tetap tersimpan.')) {
+      await onDisconnectGoogle();
+      setSuccessMsg('Koneksi Google Spreadsheet diputuskan.');
+      setTimeout(() => setSuccessMsg(null), 3000);
+    }
+  };
+
+  const handleSaveClientId = () => {
+    setCustomGoogleClientId(customClientIdInput);
+    setSuccessMsg('Google Client ID berhasil disimpan!');
+    setTimeout(() => setSuccessMsg(null), 3000);
+  };
+
+  const handleConnectWithToken = async () => {
+    if (!manualTokenInput.trim()) {
+      setErrorMsg('Masukkan Google Access Token terlebih dahulu.');
+      return;
+    }
+    setIsConnectingToken(true);
+    setErrorMsg(null);
+    try {
+      await connectWithAccessToken(manualTokenInput.trim());
+      await onConnectGoogle();
+      setSuccessMsg('Berhasil terhubung dengan Google Access Token!');
+      setTimeout(() => setSuccessMsg(null), 3500);
+    } catch (err: any) {
+      setErrorMsg(err?.message || 'Gagal menghubungkan token.');
+    } finally {
+      setIsConnectingToken(false);
+    }
+  };
+
+  const handleCopyOrigin = () => {
+    if (navigator?.clipboard && currentOrigin) {
+      navigator.clipboard.writeText(currentOrigin);
+      setCopiedDomain(true);
+      setTimeout(() => setCopiedDomain(false), 2500);
+    }
   };
 
   const cellPercentage = Math.min(
@@ -121,9 +190,23 @@ export const GoogleWorkspacePanel: React.FC<GoogleWorkspacePanelProps> = ({
       </div>
 
       {errorMsg && (
-        <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl flex items-center gap-2 text-xs text-rose-700">
-          <AlertCircle className="w-4 h-4 shrink-0" />
-          <span>{errorMsg}</span>
+        <div className="p-3.5 bg-rose-50 border border-rose-200 rounded-xl flex items-start gap-2.5 text-xs text-rose-800 animate-in fade-in duration-200">
+          <AlertCircle className="w-4 h-4 shrink-0 text-rose-600 mt-0.5" />
+          <div className="space-y-1">
+            <span className="font-semibold block">{errorMsg}</span>
+            {isVercel && (
+              <span className="text-[11px] text-rose-700 block">
+                Gunakan formulir konfigurasi Vercel di bawah untuk memasukkan Google Client ID Anda sendiri atau menghubungkan menggunakan Access Token.
+              </span>
+            )}
+          </div>
+        </div>
+      )}
+
+      {successMsg && (
+        <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl flex items-center gap-2 text-xs text-emerald-800 animate-in fade-in duration-200">
+          <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-600" />
+          <span className="font-semibold">{successMsg}</span>
         </div>
       )}
 
@@ -144,26 +227,30 @@ export const GoogleWorkspacePanel: React.FC<GoogleWorkspacePanelProps> = ({
             <button
               onClick={handleConnect}
               disabled={connecting}
-              className="inline-flex items-center gap-3 px-5 py-2.5 bg-white hover:bg-slate-50 text-slate-800 border border-slate-300 rounded-xl text-xs font-semibold shadow-xs hover:shadow transition-all cursor-pointer"
+              className="inline-flex items-center gap-3 px-5 py-2.5 bg-white hover:bg-slate-50 text-slate-800 border border-slate-300 rounded-xl text-xs font-semibold shadow-xs hover:shadow transition-all cursor-pointer disabled:opacity-60"
             >
-              <svg className="w-4 h-4" viewBox="0 0 48 48">
-                <path
-                  fill="#EA4335"
-                  d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"
-                ></path>
-                <path
-                  fill="#4285F4"
-                  d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"
-                ></path>
-                <path
-                  fill="#FBBC05"
-                  d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"
-                ></path>
-                <path
-                  fill="#34A853"
-                  d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"
-                ></path>
-              </svg>
+              {connecting ? (
+                <RefreshCw className="w-4 h-4 text-teal-600 animate-spin" />
+              ) : (
+                <svg className="w-4 h-4" viewBox="0 0 48 48">
+                  <path
+                    fill="#EA4335"
+                    d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"
+                  ></path>
+                  <path
+                    fill="#4285F4"
+                    d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"
+                  ></path>
+                  <path
+                    fill="#FBBC05"
+                    d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"
+                  ></path>
+                  <path
+                    fill="#34A853"
+                    d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"
+                  ></path>
+                </svg>
+              )}
               <span>{connecting ? 'Menghubungkan...' : 'Sign in with Google'}</span>
             </button>
           </div>
@@ -187,6 +274,93 @@ export const GoogleWorkspacePanel: React.FC<GoogleWorkspacePanelProps> = ({
                 Otomatis generate volume database baru saat mencapai 9 juta sel.
               </span>
             </div>
+          </div>
+
+          {/* Vercel & Custom Domain Configuration Box */}
+          <div className="mt-4 pt-4 border-t border-slate-200 text-left">
+            <button
+              type="button"
+              onClick={() => setShowVercelConfig(!showVercelConfig)}
+              className="flex items-center justify-between w-full p-3 bg-white hover:bg-slate-100 rounded-xl border border-slate-200 transition-colors text-xs font-semibold text-slate-800 cursor-pointer"
+            >
+              <span className="flex items-center gap-2">
+                <Key className="w-4 h-4 text-teal-600" />
+                <span>Pengaturan Khusus Deployment Vercel ({currentHost || 'Domain Anda'})</span>
+              </span>
+              {showVercelConfig ? <ChevronUp className="w-4 h-4 text-slate-400" /> : <ChevronDown className="w-4 h-4 text-slate-400" />}
+            </button>
+
+            {showVercelConfig && (
+              <div className="mt-3 p-4 bg-white rounded-xl border border-slate-200 space-y-4 text-xs">
+                <div className="p-3 bg-teal-50 border border-teal-200 rounded-lg space-y-1">
+                  <span className="text-[11px] font-bold text-teal-900 block">
+                    Domain Vercel Anda Saat Ini:
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <code className="text-[11px] bg-white px-2 py-1 rounded border border-teal-200 font-mono text-teal-800 select-all">
+                      {currentOrigin}
+                    </code>
+                    <button
+                      type="button"
+                      onClick={handleCopyOrigin}
+                      className="px-2.5 py-1 bg-white hover:bg-teal-100 text-teal-800 border border-teal-300 rounded font-semibold text-[10px] flex items-center gap-1 cursor-pointer transition-colors"
+                    >
+                      <Copy className="w-3 h-3" />
+                      <span>{copiedDomain ? 'Tersalin!' : 'Salin Domain'}</span>
+                    </button>
+                  </div>
+                  <p className="text-[10px] text-teal-700 mt-1">
+                    Tambahkan domain ini ke <strong>Authorized JavaScript origins</strong> di Google Cloud Console pada OAuth 2.0 Client ID Anda.
+                  </p>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="block font-semibold text-slate-700">
+                    Opsi 1: Masukkan Google OAuth Client ID Anda (Rekomendasi untuk Vercel)
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      value={customClientIdInput}
+                      onChange={(e) => setCustomClientIdInput(e.target.value)}
+                      placeholder="e.g. 123456789-abcdef.apps.googleusercontent.com"
+                      className="flex-1 p-2 border border-slate-200 rounded-lg font-mono text-xs focus:ring-1 focus:ring-teal-500"
+                    />
+                    <button
+                      type="button"
+                      onClick={handleSaveClientId}
+                      className="px-4 py-2 bg-slate-800 hover:bg-slate-900 text-white rounded-lg font-semibold cursor-pointer"
+                    >
+                      Simpan Client ID
+                    </button>
+                  </div>
+                </div>
+
+                <div className="space-y-2 pt-2 border-t border-slate-100">
+                  <label className="block font-semibold text-slate-700">
+                    Opsi 2: Hubungkan Langsung Menggunakan Google Access Token
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="password"
+                      value={manualTokenInput}
+                      onChange={(e) => setManualTokenInput(e.target.value)}
+                      placeholder="Masukkan Bearer Access Token (ya29...)"
+                      className="flex-1 p-2 border border-slate-200 rounded-lg font-mono text-xs focus:ring-1 focus:ring-teal-500"
+                    />
+                    <button
+                      type="button"
+                      onClick={handleConnectWithToken}
+                      disabled={isConnectingToken}
+                      className="px-4 py-2 bg-teal-700 hover:bg-teal-800 text-white rounded-lg font-semibold cursor-pointer disabled:opacity-60 flex items-center gap-1.5"
+                    >
+                      {isConnectingToken ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : null}
+                      <span>Hubungkan Token</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       ) : (
@@ -218,48 +392,53 @@ export const GoogleWorkspacePanel: React.FC<GoogleWorkspacePanelProps> = ({
                 <img
                   src={status.userAvatar}
                   alt={status.userName || 'Google User'}
-                  className="w-8 h-8 rounded-full border border-slate-300"
-                  referrerPolicy="no-referrer"
+                  className="w-10 h-10 rounded-full object-cover border border-slate-200"
                 />
               ) : (
-                <div className="w-8 h-8 rounded-full bg-emerald-600 text-white font-bold text-xs flex items-center justify-center">
-                  {(status.userName || status.userEmail || 'G')[0].toUpperCase()}
+                <div className="w-10 h-10 rounded-full bg-emerald-100 text-emerald-800 flex items-center justify-center font-bold text-sm border border-emerald-200">
+                  {status.userName ? status.userName.charAt(0) : 'G'}
                 </div>
               )}
               <div>
                 <span className="text-xs font-bold text-slate-800 block">
                   {status.userName || 'Akun Google Terhubung'}
                 </span>
-                <span className="text-[11px] text-slate-500 font-mono">{status.userEmail}</span>
+                <span className="text-[11px] text-slate-500 block font-mono">
+                  {status.userEmail || 'google-auth@workspace'}
+                </span>
               </div>
             </div>
 
-            {status.lastSyncedAt && (
-              <div className="text-right">
-                <span className="text-[11px] text-slate-400 block">Terakhir Disinkronkan:</span>
-                <span className="text-xs font-medium text-slate-700">{status.lastSyncedAt}</span>
-              </div>
-            )}
+            <div className="text-right">
+              <span className="text-[10px] text-slate-400 block uppercase font-semibold">Status Auto-Sync</span>
+              <span className="text-xs font-bold text-emerald-600 flex items-center gap-1 justify-end">
+                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                Realtime Aktif
+              </span>
+            </div>
           </div>
 
-          {/* Database Links Grid */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {/* Google Sheets Card */}
-            <div className="p-4 bg-emerald-50/50 rounded-xl border border-emerald-200 flex flex-col justify-between space-y-3">
-              <div className="flex items-start justify-between">
-                <div className="flex items-center gap-2.5">
-                  <div className="p-2 bg-emerald-600 text-white rounded-lg">
-                    <FileSpreadsheet className="w-4 h-4" />
-                  </div>
-                  <div>
-                    <span className="text-xs font-bold text-slate-900 block">
-                      {status.spreadsheetName || `Klinik_Finance_DB_Vol${status.volumeNumber}`}
-                    </span>
-                    <span className="text-[11px] text-emerald-700 font-medium">
-                      Google Spreadsheet Aktif (Vol {status.volumeNumber})
-                    </span>
-                  </div>
+          {/* Database Info Cards */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {/* Active Spreadsheet Card */}
+            <div className="p-4 bg-emerald-50/50 rounded-xl border border-emerald-200 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
+                  <span className="text-xs font-bold text-slate-800">Active Database</span>
                 </div>
+                <span className="text-[10px] px-2 py-0.5 rounded-full font-bold bg-emerald-100 text-emerald-800">
+                  Vol {status.volumeNumber || 1}
+                </span>
+              </div>
+
+              <div>
+                <span className="text-xs font-semibold text-slate-900 block truncate">
+                  {status.spreadsheetName || 'KLINIK FINANCE DB 001'}
+                </span>
+                <span className="text-[10px] text-slate-500 font-mono block truncate">
+                  ID: {status.spreadsheetId || '-'}
+                </span>
               </div>
 
               {status.spreadsheetUrl && (
@@ -267,87 +446,90 @@ export const GoogleWorkspacePanel: React.FC<GoogleWorkspacePanelProps> = ({
                   href={status.spreadsheetUrl}
                   target="_blank"
                   rel="noreferrer"
-                  className="inline-flex items-center justify-center gap-1.5 px-3 py-2 bg-white hover:bg-emerald-50 text-emerald-800 border border-emerald-300 rounded-lg text-xs font-bold transition-colors shadow-xs"
+                  className="inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-700 hover:text-emerald-800 hover:underline"
                 >
-                  <span>Buka Google Spreadsheet</span>
                   <ExternalLink className="w-3.5 h-3.5" />
+                  <span>Buka di Google Sheets</span>
                 </a>
               )}
             </div>
 
-            {/* Google Drive Card */}
-            <div className="p-4 bg-sky-50/50 rounded-xl border border-sky-200 flex flex-col justify-between space-y-3">
-              <div className="flex items-start justify-between">
-                <div className="flex items-center gap-2.5">
-                  <div className="p-2 bg-sky-600 text-white rounded-lg">
-                    <HardDrive className="w-4 h-4" />
-                  </div>
-                  <div>
-                    <span className="text-xs font-bold text-slate-900 block">
-                      [Klinik Finance] Database & Arsip Medis
-                    </span>
-                    <span className="text-[11px] text-sky-700 font-medium">
-                      Folder Google Drive Utama
-                    </span>
-                  </div>
+            {/* Google Drive Folder Card */}
+            <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <FolderOpen className="w-4 h-4 text-teal-600" />
+                  <span className="text-xs font-bold text-slate-800">Drive Bukti & Nota</span>
                 </div>
+                <span className="text-[10px] text-slate-400 font-semibold">PDF / Foto</span>
               </div>
 
-              {status.driveFolderUrl ? (
+              <div>
+                <span className="text-xs font-semibold text-slate-900 block">
+                  Bukti_Nota_Kwitansi_PDF
+                </span>
+                <span className="text-[10px] text-slate-500 block">
+                  Penyimpanan berkas transaksi & nota pengeluaran
+                </span>
+              </div>
+
+              {status.driveFolderUrl && (
                 <a
                   href={status.driveFolderUrl}
                   target="_blank"
                   rel="noreferrer"
-                  className="inline-flex items-center justify-center gap-1.5 px-3 py-2 bg-white hover:bg-sky-50 text-sky-800 border border-sky-300 rounded-lg text-xs font-bold transition-colors shadow-xs"
+                  className="inline-flex items-center gap-1.5 text-xs font-semibold text-teal-700 hover:text-teal-800 hover:underline"
                 >
+                  <ExternalLink className="w-3.5 h-3.5" />
                   <span>Buka Folder Google Drive</span>
-                  <FolderOpen className="w-3.5 h-3.5" />
                 </a>
-              ) : (
-                <span className="text-xs text-slate-400">Siap saat sinkronisasi pertama</span>
               )}
             </div>
           </div>
 
-          {/* Cell Capacity Meter (10M Limit & 9M Auto-Rollover) */}
-          <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 space-y-2.5">
+          {/* Cell Capacity & Auto-Rollover Monitor */}
+          <div className="bg-slate-50 rounded-xl p-4 border border-slate-200 space-y-3">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <Layers className="w-4 h-4 text-teal-600" />
+                <Layers className="w-4 h-4 text-emerald-600" />
                 <span className="text-xs font-bold text-slate-800">
-                  Kapasitas Sel Spreadsheet (Volume {status.volumeNumber})
+                  Monitor Kapasitas Sel Database
                 </span>
               </div>
-              <span className="text-xs font-mono font-bold text-slate-900">
-                {status.totalCellsUsed.toLocaleString()} / {status.maxCellsCapacity.toLocaleString()} Sel ({cellPercentage}%)
+              <span className="text-xs font-mono font-bold text-slate-700">
+                {status.totalCellsUsed.toLocaleString('id-ID')} / {status.autoRolloverThreshold.toLocaleString('id-ID')} sel
               </span>
             </div>
 
             {/* Progress Bar */}
             <div className="w-full bg-slate-200 rounded-full h-2.5 overflow-hidden">
               <div
-                className={`h-2.5 rounded-full transition-all duration-300 ${
-                  rolloverPercent > 80
-                    ? 'bg-amber-500'
-                    : rolloverPercent > 95
-                    ? 'bg-rose-500'
-                    : 'bg-teal-600'
+                className={`h-2.5 rounded-full transition-all duration-500 ${
+                  rolloverPercent > 80 ? 'bg-amber-500' : 'bg-emerald-500'
                 }`}
-                style={{ width: `${Math.max(2, cellPercentage)}%` }}
+                style={{ width: `${Math.max(1, rolloverPercent)}%` }}
               ></div>
             </div>
 
-            {/* Explanatory Note */}
-            <div className="flex items-center justify-between text-[11px] text-slate-500">
-              <span className="flex items-center gap-1">
-                <Sparkles className="w-3.5 h-3.5 text-teal-600" />
-                <span>
-                  Batas Google Sheets: <strong>10 Juta Sel</strong>. Sistem otomatis men-generate volume baru saat mencapai <strong>9,5 Juta Sel (Batas Aman)</strong>.
-                </span>
+            <div className="flex flex-wrap items-center justify-between gap-2 text-[10px] text-slate-500">
+              <span>Batas Aman Rotasi: 9.500.000 sel (Maksimal 10.000.000 sel)</span>
+              <span>Terpakai: {cellPercentage}%</span>
+            </div>
+
+            <div className="bg-white p-2.5 rounded-lg border border-slate-200 text-[11px] text-slate-600 flex items-start gap-2">
+              <Sparkles className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+              <span>
+                <strong>Auto-Rotation Aktif:</strong> Saat database aktif mendekati batas 9.500.000 sel, sistem otomatis mengarsipkan database ini dan membuat <strong>KLINIK FINANCE DB 00{status.volumeNumber + 1}</strong> tanpa menghapus riwayat lama.
               </span>
-              <span className="text-slate-400">Ambang batas: 95% (9.500.000 sel)</span>
             </div>
           </div>
+
+          {/* Last Sync Timestamp */}
+          {status.lastSyncedAt && (
+            <div className="text-center text-[11px] text-slate-400">
+              Sinkronisasi terakhir: {status.lastSyncedAt}
+            </div>
+          )}
         </div>
       )}
     </div>

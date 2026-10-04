@@ -431,8 +431,9 @@ export default function App() {
     } catch (err: any) {
       if (err?.code !== 'auth/popup-closed-by-user' && err?.code !== 'auth/cancelled-popup-request') {
         console.warn('Google Sign-in status:', err?.message || err);
-        setToastMessage(`Login Google gagal: ${err?.message || 'Terjadi kesalahan'}`);
-        setTimeout(() => setToastMessage(null), 5000);
+        const displayMsg = err?.friendlyMessage || err?.message || 'Terjadi kesalahan';
+        setToastMessage(`Login Google: ${displayMsg}`);
+        setTimeout(() => setToastMessage(null), 6000);
       }
       throw err;
     }
