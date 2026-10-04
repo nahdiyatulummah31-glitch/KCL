@@ -315,9 +315,23 @@ export const GoogleWorkspacePanel: React.FC<GoogleWorkspacePanelProps> = ({
                 </div>
 
                 <div className="space-y-2">
-                  <label className="block font-semibold text-slate-700">
-                    Opsi 1: Masukkan Google OAuth Client ID Anda (Rekomendasi untuk Vercel)
-                  </label>
+                  <div className="flex items-center justify-between">
+                    <label className="block font-semibold text-slate-700">
+                      Opsi 1: Masukkan Google OAuth Client ID Anda (Untuk Login Vercel)
+                    </label>
+                    <a
+                      href="https://console.cloud.google.com/apis/credentials"
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-[11px] text-teal-700 hover:text-teal-900 font-semibold flex items-center gap-1 hover:underline"
+                    >
+                      <ExternalLink className="w-3 h-3" />
+                      <span>Buka Google Cloud Console</span>
+                    </a>
+                  </div>
+                  <p className="text-[10px] text-slate-500">
+                    Langkah: Buat OAuth client ID (Web Application) &rarr; Tambahkan origin <code>{currentOrigin}</code> &rarr; Simpan &amp; tempelkan Client ID di sini:
+                  </p>
                   <div className="flex items-center gap-2">
                     <input
                       type="text"
@@ -329,17 +343,31 @@ export const GoogleWorkspacePanel: React.FC<GoogleWorkspacePanelProps> = ({
                     <button
                       type="button"
                       onClick={handleSaveClientId}
-                      className="px-4 py-2 bg-slate-800 hover:bg-slate-900 text-white rounded-lg font-semibold cursor-pointer"
+                      className="px-4 py-2 bg-slate-800 hover:bg-slate-900 text-white rounded-lg font-semibold cursor-pointer shrink-0"
                     >
                       Simpan Client ID
                     </button>
                   </div>
                 </div>
 
-                <div className="space-y-2 pt-2 border-t border-slate-100">
-                  <label className="block font-semibold text-slate-700">
-                    Opsi 2: Hubungkan Langsung Menggunakan Google Access Token
-                  </label>
+                <div className="space-y-2 pt-3 border-t border-slate-100">
+                  <div className="flex items-center justify-between">
+                    <label className="block font-semibold text-slate-700">
+                      Opsi 2: Hubungkan Cepat via Google Access Token (Instan Tanpa Setup GCP)
+                    </label>
+                    <a
+                      href="https://developers.google.com/oauthplayground"
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-[11px] text-teal-700 hover:text-teal-900 font-semibold flex items-center gap-1 hover:underline"
+                    >
+                      <ExternalLink className="w-3 h-3" />
+                      <span>Buka Google OAuth Playground</span>
+                    </a>
+                  </div>
+                  <p className="text-[10px] text-slate-500">
+                    Langkah: Buka OAuth Playground &rarr; Centang Sheets &amp; Drive API &rarr; Klik Authorize &rarr; Exchange token &rarr; Tempelkan token <code>ya29...</code> di bawah:
+                  </p>
                   <div className="flex items-center gap-2">
                     <input
                       type="password"
@@ -352,7 +380,7 @@ export const GoogleWorkspacePanel: React.FC<GoogleWorkspacePanelProps> = ({
                       type="button"
                       onClick={handleConnectWithToken}
                       disabled={isConnectingToken}
-                      className="px-4 py-2 bg-teal-700 hover:bg-teal-800 text-white rounded-lg font-semibold cursor-pointer disabled:opacity-60 flex items-center gap-1.5"
+                      className="px-4 py-2 bg-teal-700 hover:bg-teal-800 text-white rounded-lg font-semibold cursor-pointer disabled:opacity-60 flex items-center gap-1.5 shrink-0"
                     >
                       {isConnectingToken ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : null}
                       <span>Hubungkan Token</span>

@@ -33,6 +33,8 @@ import {
   loadAllFromGoogleDatabase,
   getAccessToken,
   hasSavedGoogleToken,
+  connectWithAccessToken,
+  fetchGoogleUserProfile,
 } from './services/googleWorkspace';
 import {
   RotateCcw,
@@ -385,10 +387,28 @@ export default function App() {
   }, []);
 
   // Google Workspace Handlers
-  const handleConnectGoogle = async () => {
+  const handleConnectGoogle = async (tokenOverride?: string) => {
     try {
-      const cred = await googleSignIn();
-      const user = cred.user;
+      let user: { email?: string; displayName?: string; photoURL?: string } = {};
+
+      if (tokenOverride && tokenOverride.trim()) {
+        const res = await connectWithAccessToken(tokenOverride.trim());
+        user = res.user;
+      } else if (hasSavedGoogleToken()) {
+        const token = await getAccessToken();
+        if (token) {
+          const profileData = await fetchGoogleUserProfile(token);
+          user = {
+            email: profileData.email || undefined,
+            displayName: profileData.name || undefined,
+            photoURL: profileData.picture || undefined,
+          };
+        }
+      } else {
+        const cred = await googleSignIn();
+        user = cred.user;
+      }
+
       const updatedStatus: GoogleDatabaseStatus = {
         ...googleStatus,
         isConnected: true,
@@ -1022,6 +1042,8 @@ export default function App() {
         users={users}
         activeUser={activeUser}
         onLoginSuccess={handleLoginSuccess}
+        onConnectGoogle={handleConnectGoogle}
+        googleStatus={googleStatus}
       />
     );
   }

@@ -107,12 +107,17 @@ export const DatabaseSyncModal: React.FC<DatabaseSyncModalProps> = ({
     }
   };
 
+  const [confirmDisconnect, setConfirmDisconnect] = useState(false);
+
   const handleDisconnect = async () => {
-    if (window.confirm('Apakah Anda yakin ingin memutuskan koneksi Google Spreadsheet? Data lokal tetap tersimpan di browser.')) {
-      await onDisconnectGoogle();
-      setSuccessMessage('Koneksi Google Spreadsheet diputuskan.');
-      setTimeout(() => setSuccessMessage(null), 3000);
+    if (!confirmDisconnect) {
+      setConfirmDisconnect(true);
+      return;
     }
+    setConfirmDisconnect(false);
+    await onDisconnectGoogle();
+    setSuccessMessage('Koneksi Google Spreadsheet diputuskan.');
+    setTimeout(() => setSuccessMessage(null), 3000);
   };
 
   const handleSaveAdvanced = () => {
@@ -300,10 +305,15 @@ export const DatabaseSyncModal: React.FC<DatabaseSyncModalProps> = ({
 
                     <button
                       onClick={handleDisconnect}
-                      className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition-colors cursor-pointer"
-                      title="Putuskan Akun Google"
+                      className={`p-1.5 rounded-xl transition-colors cursor-pointer flex items-center gap-1 ${
+                        confirmDisconnect
+                          ? 'bg-rose-600 text-white font-bold text-xs px-2.5 py-1'
+                          : 'text-slate-400 hover:text-rose-600 hover:bg-rose-50'
+                      }`}
+                      title={confirmDisconnect ? 'Klik lagi untuk konfirmasi putuskan koneksi' : 'Putuskan Akun Google'}
                     >
                       <LogOut className="w-4 h-4" />
+                      {confirmDisconnect && <span>Yakin Putuskan?</span>}
                     </button>
                   </div>
                 </div>
