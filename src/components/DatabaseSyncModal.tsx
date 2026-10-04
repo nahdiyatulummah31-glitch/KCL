@@ -29,6 +29,7 @@ import {
   ACTIVE_DB_SPREADSHEET_ID_KEY,
   MAX_CELLS_CAPACITY,
   AUTO_ROLLOVER_THRESHOLD,
+  CLOUD_OAUTH_BRIDGE_URL,
 } from '../services/googleWorkspace';
 import { FullClinicDatabase, exportDatabaseToFile, parseDatabaseFile } from '../services/cloudDatabase';
 
@@ -434,6 +435,19 @@ export const DatabaseSyncModal: React.FC<DatabaseSyncModalProps> = ({
                     )}
                     <span>{connecting ? 'Menghubungkan Akun Google...' : 'Sign in with Google (Hubungkan Database)'}</span>
                   </button>
+                </div>
+
+                {/* Direct link fallback if browser blocks popups */}
+                <div className="pt-0.5 text-center">
+                  <a
+                    href={`${CLOUD_OAUTH_BRIDGE_URL}?origin=${encodeURIComponent(typeof window !== 'undefined' ? window.location.origin : '*')}&returnUrl=${encodeURIComponent(typeof window !== 'undefined' ? window.location.href.split('#')[0] : '')}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-1.5 text-[11px] text-teal-700 hover:text-teal-900 underline font-semibold transition-colors"
+                  >
+                    <ExternalLink className="w-3.5 h-3.5" />
+                    <span>Jika popup terblokir browser, klik di sini untuk Buka Otorisasi Google di Tab Baru</span>
+                  </a>
                 </div>
 
                 <div className="flex items-center justify-center gap-4 text-[10px] text-slate-500 pt-1">

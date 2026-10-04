@@ -342,6 +342,103 @@ export const isExternalOrVercel = (): boolean => {
   return host.endsWith('.vercel.app') || (host !== 'localhost' && host !== '127.0.0.1' && !host.includes('run.app'));
 };
 
+export const CLOUD_OAUTH_BRIDGE_URL =
+  'https://ais-pre-m2tyxekijaw3zleg2ar4uj-426625754387.asia-southeast1.run.app/oauth-bridge.html';
+
+/**
+ * Open OAuth authorization bridge on the authorized Google Cloud domain.
+ * This completely prevents Error 400: origin_mismatch when running on Vercel or custom domains.
+ */
+export function openGoogleOAuthBridge(): Promise<{
+  user: { email: string; displayName: string; photoURL?: string };
+  accessToken: string;
+}> {
+  return new Promise((resolve, reject) => {
+    if (typeof window === 'undefined') {
+      reject(new Error('Browser environment not available.'));
+      return;
+    }
+
+    const currentOrigin = window.location.origin;
+    const returnUrl = window.location.href.split('#')[0];
+    const bridgeUrl = isExternalOrVercel()
+      ? `${CLOUD_OAUTH_BRIDGE_URL}?origin=${encodeURIComponent(currentOrigin)}&returnUrl=${encodeURIComponent(returnUrl)}`
+      : `/oauth-bridge.html?origin=${encodeURIComponent(currentOrigin)}&returnUrl=${encodeURIComponent(returnUrl)}`;
+
+    const width = 500;
+    const height = 620;
+    const left = window.screenX + Math.max(0, (window.outerWidth - width) / 2);
+    const top = window.screenY + Math.max(0, (window.outerHeight - height) / 2);
+
+    const popup = window.open(
+      bridgeUrl,
+      'klinik_google_auth',
+      `width=${width},height=${height},left=${left},top=${top},status=no,toolbar=no,menubar=no`
+    );
+
+    let resolved = false;
+
+    const messageListener = async (event: MessageEvent) => {
+      if (event.data && event.data.type === 'KLINIK_GOOGLE_AUTH_SUCCESS') {
+        resolved = true;
+        window.removeEventListener('message', messageListener);
+        if (popup && !popup.closed) {
+          try {
+            popup.close();
+          } catch {}
+        }
+
+        const token = event.data.accessToken;
+        const expiresInSec = event.data.expiresIn ? parseInt(event.data.expiresIn, 10) : 3500;
+        const expiryTimestamp = Date.now() + expiresInSec * 1000;
+
+        cachedAccessToken = token;
+        try {
+          localStorage.setItem(GOOGLE_TOKEN_KEY, token);
+          localStorage.setItem(GOOGLE_TOKEN_EXPIRY_KEY, expiryTimestamp.toString());
+        } catch {}
+
+        let userInfo = event.data.user;
+        if (!userInfo || !userInfo.email) {
+          userInfo = await fetchGoogleUserProfile(token);
+        }
+
+        resolve({
+          user: {
+            email: userInfo.email || '',
+            displayName: userInfo.name || userInfo.email || 'Pengguna Google',
+            photoURL: userInfo.picture,
+          },
+          accessToken: token,
+        });
+      }
+    };
+
+    window.addEventListener('message', messageListener);
+
+    // Watch for popup closure
+    const checkClosedInterval = setInterval(() => {
+      if (popup && popup.closed) {
+        clearInterval(checkClosedInterval);
+        setTimeout(() => {
+          if (!resolved) {
+            window.removeEventListener('message', messageListener);
+            reject(new Error('Jendela otorisasi Google ditutup sebelum selesai.'));
+          }
+        }, 1200);
+      }
+    }, 600);
+
+    // Safety timeout: 3 minutes
+    setTimeout(() => {
+      if (!resolved) {
+        clearInterval(checkClosedInterval);
+        window.removeEventListener('message', messageListener);
+      }
+    }, 180000);
+  });
+}
+
 /**
  * Connect directly using a Google OAuth Access Token
  * Useful for Vercel deployments and instant device pairing
@@ -378,14 +475,31 @@ export async function connectWithAccessToken(token: string): Promise<{
 
 /**
  * Main Google Sign-In:
- * 1. Uses Firebase Auth popup (works with Google Workspace scopes on authorized domains and Firebase auth domain).
- * 2. If Firebase popup is closed or restricted, falls back gracefully to Google Identity Services (GIS).
+ * 1. On Vercel / custom domains: Uses Google Cloud OAuth Bridge to prevent Error 400: origin_mismatch.
+ * 2. On AI Studio / localhost: Uses Firebase Auth popup or GIS.
  */
 export const googleSignIn = async (): Promise<{
   user: { email: string; displayName: string; photoURL?: string };
   accessToken: string;
 }> => {
-  // 1. Try Firebase Auth popup first across all environments
+  // If running on Vercel or external domain:
+  if (isExternalOrVercel()) {
+    // If the user specified their own custom Google Client ID in settings, try GIS with their ID
+    const customId = localStorage.getItem(CUSTOM_CLIENT_ID_KEY);
+    const envId = (import.meta as any).env?.VITE_GOOGLE_CLIENT_ID;
+    if ((customId && customId.trim().length > 10) || (envId && envId.trim().length > 10)) {
+      try {
+        return await googleSignInGIS();
+      } catch (e) {
+        console.warn('Custom Client ID login notice, falling back to Cloud Bridge:', e);
+      }
+    }
+
+    // Default for Vercel: Use Google Cloud OAuth Bridge (100% immune to Error 400: origin_mismatch)
+    return await openGoogleOAuthBridge();
+  }
+
+  // 1. Try Firebase Auth popup across AI Studio environments
   try {
     const result = await signInWithPopup(firebaseAuth, firebaseGoogleProvider);
     const credential = GoogleAuthProvider.credentialFromResult(result);
@@ -423,28 +537,14 @@ export const googleSignIn = async (): Promise<{
       err.friendlyMessage = 'Jendela login Google ditutup sebelum selesai.';
       throw err;
     }
-    // If auth/unauthorized-domain or network failure, we try GIS as fallback below
   }
 
   // 2. Google Identity Services (GIS) fallback
   try {
     return await googleSignInGIS();
   } catch (gisErr: any) {
-    console.warn('GIS fallback notice:', gisErr);
-    const origin = typeof window !== 'undefined' ? window.location.origin : '';
-    if (
-      gisErr?.message?.includes('origin') ||
-      gisErr?.friendlyMessage?.includes('origin') ||
-      isExternalOrVercel()
-    ) {
-      const friendlyErr: any = new Error(
-        `Untuk menghubungkan Google Spreadsheet di domain ini (${origin}), Anda dapat memasukkan Google Access Token atau Google Client ID Anda di jendela Pengaturan Database.`
-      );
-      friendlyErr.friendlyMessage = `Untuk menghubungkan Google Spreadsheet di domain ini (${origin}), Anda dapat memasukkan Google Access Token atau Google Client ID Anda di jendela Pengaturan Database. Seluruh data tetap aman tersimpan di browser secara offline.`;
-      friendlyErr.code = 'origin_not_configured';
-      throw friendlyErr;
-    }
-    throw gisErr;
+    console.warn('GIS fallback notice, trying Cloud Bridge:', gisErr);
+    return await openGoogleOAuthBridge();
   }
 };
 

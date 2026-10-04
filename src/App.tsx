@@ -384,6 +384,28 @@ export default function App() {
         });
       }
     );
+
+    // Check if returning from Google OAuth Bridge with #google_token=
+    if (typeof window !== 'undefined' && window.location.hash.includes('google_token=')) {
+      try {
+        const hashStr = window.location.hash.startsWith('#')
+          ? window.location.hash.slice(1)
+          : window.location.hash;
+        const params = new URLSearchParams(hashStr);
+        const token = params.get('google_token');
+        if (token) {
+          window.history.replaceState(null, '', window.location.pathname + window.location.search);
+          setTimeout(() => {
+            handleConnectGoogle(token).then(() => {
+              setToastMessage('Berhasil terhubung ke Google Spreadsheet Database!');
+              setTimeout(() => setToastMessage(null), 4000);
+            });
+          }, 200);
+        }
+      } catch (e) {
+        console.warn('Error parsing return token from hash:', e);
+      }
+    }
   }, []);
 
   // Google Workspace Handlers
